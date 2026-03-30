@@ -1,0 +1,50 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Student Notes</title>
+<link rel="stylesheet" href="./styles.css">
+<link rel="manifest" href="manifest.json">
+<meta name="theme-color" content="#2563eb">
+<link rel="apple-touch-icon" href="logo.png">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="default">
+<meta name="apple-mobile-web-app-title" content="Student Notes">
+</head>
+<body>
+<div class="app">
+<header class="header">
+<h1>Student Notes</h1>
+<div class="tabs">
+<button id="tab-today" class="tab active">Today</button>
+<button id="tab-all" class="tab">All</button>
+</div>
+</header>
+<main class="main">
+<section class="form-section">
+<div class="form-row">
+        <label for="note-date">Note Date</label>
+        <input id="note-date" type="date">
+      </div>
+      <div class="form-row">
+        <label for="phone">Number</label>
+<input id="phone" type="tel" placeholder="01XXXXXXXXX" inputmode="numeric" pattern="[0-9]{11}" list="phone-suggestions">
+<datalist id="phone-suggestions"></datalist>
+</div>
+<div class="form-row">
+<label for="note">Note</label>
+<textarea id="note" rows="3" placeholder="Write a note"></textarea>
+</div>
+<div class="form-actions">
+<button id="save" class="save">Save Note</button>
+<div id="status" style="margin-top: 0.5rem; text-align: center; font-size: 0.85rem;"></div>
+</div>
+</section>
+<section id="today-view" class="list-section"></section>
+<section id="all-view" class="list-section hidden"></section>
+</main>
+</div>
+<script src="./app.js"></script>
+</body>
+<html>
