@@ -4,6 +4,9 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Student Notes</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap" rel="stylesheet">
 <link rel="stylesheet" href="./styles.css">
 <link rel="manifest" href="manifest.json">
 <meta name="theme-color" content="#2563eb">
@@ -29,9 +32,17 @@
       </div>
       <div class="form-row">
         <label for="phone">Number</label>
-<input id="phone" type="tel" placeholder="01XXXXXXXXX" inputmode="numeric" pattern="[0-9]{11}" list="phone-suggestions">
-<datalist id="phone-suggestions"></datalist>
-</div>
+        <div class="input-with-icon">
+          <input id="phone" type="tel" placeholder="01XXXXXXXXX" inputmode="numeric" pattern="[0-9]{11}" list="phone-suggestions">
+          <button id="paste-phone" type="button" class="icon-btn" title="Paste number">
+            <svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+              <rect x="9" y="9" width="13" height="13" rx="2" ry="2"></rect>
+              <path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"></path>
+            </svg>
+          </button>
+        </div>
+        <datalist id="phone-suggestions"></datalist>
+      </div>
 <div class="form-row">
 <label for="note">Note</label>
 <textarea id="note" rows="3" placeholder="Write a note"></textarea>

@@ -1,7 +1,21 @@
 // Google Sheets Web App URL (Replace with your deployed script URL)
 const SCRIPT_URL = "https://script.google.com/macros/s/AKfycbyy977GdY9FWlgA1QPZsA5oWw5W4tAuDlSpxHELFC_09eZZ3ck8sAoGY6Awg-1MfHQb/exec";
 
-const state={priority:false,activeTab:"today",editingId:null,selectedIds:new Set()}
+const state={priority:false,activeTab:"today",editingId:null,selectedIds:new Set(),lastItems:[]}
+
+// LocalStorage Helper
+const cache = {
+  set: (key, data) => localStorage.setItem(key, JSON.stringify({ data, time: Date.now() })),
+  get: (key) => {
+    const val = localStorage.getItem(key);
+    if (!val) return null;
+    const { data, time } = JSON.parse(val);
+    // ৫ মিনিট পর্যন্ত ক্যাশ ভ্যালিড থাকবে
+    if (Date.now() - time > 5 * 60 * 1000) return null;
+    return data;
+  }
+};
+
 function fmtDate(d){
   const x = new Date(d);
   if (isNaN(x.getTime())) return "";
@@ -45,12 +59,17 @@ async function saveRemote(payload){
   return await callSheets('save', payload);
 }
 
-async function listRemote(){
+async function listRemote(useCache = true){
+  if (useCache) {
+    const cachedData = cache.get('notes_list');
+    if (cachedData) return { items: cachedData, fromCache: true };
+  }
+  
   console.log("Fetching from Google Sheets...");
   try {
-    // সরাসরি ফাইল মোড থেকে লিস্ট করার জন্য GET রিকোয়েস্ট
     const response = await fetch(`${SCRIPT_URL}?action=list`);
     const data = await response.json();
+    cache.set('notes_list', data);
     return { items: data || [] };
   } catch (e) {
     console.error("Fetch error:", e);
@@ -65,6 +84,9 @@ async function saveNote(data){
     status.style.color = "blue";
     
     await saveRemote(data);
+    
+    // ডাটা সেভ হলে ক্যাশ ক্লিয়ার করে দিব যাতে নতুন ডাটা দেখা যায়
+    localStorage.removeItem('notes_list');
     
     status.textContent = "Saved to Google Sheets!";
     status.style.color = "green";
@@ -90,8 +112,10 @@ async function deleteSelected() {
   
   try {
     const indices = Array.from(state.selectedIds);
-    // Use callSheets directly, it already handles no-cors
     await callSheets('deleteBulk', { sheetIndices: indices });
+    
+    // ডিলিট সফল হলে ক্যাশ ক্লিয়ার করা
+    localStorage.removeItem('notes_list');
     
     state.selectedIds.clear();
     status.textContent = "Deleted successfully!";
@@ -100,7 +124,7 @@ async function deleteSelected() {
     // Refresh UI
     setTimeout(async () => {
       status.textContent = "";
-      await refresh();
+      await refresh(false); // ফোর্স রিফ্রেশ
     }, 1000);
   } catch(e) {
     console.error("Delete failed:", e);
@@ -115,17 +139,17 @@ function toggleSelect(sheetIndex) {
   } else {
     state.selectedIds.add(sheetIndex);
   }
-  // Refresh the list to show selection
-  const today = state.activeTab === 'today' ? 'today-view' : (state.activeTab === 'all' ? 'all-view' : null);
-  if (today) {
-    const currentItems = state.lastItems || [];
-    renderList(currentItems, today);
+  // Refresh the list to show selection - Fast render from last items
+  const container = state.activeTab === 'today' ? 'today-view' : (state.activeTab === 'all' ? 'all-view' : null);
+  if (container) {
+    renderList(state.lastItems || [], container);
   }
 }
 
 async function editNote(sheetIndex) {
-  // Find the note to edit by its sheetIndex
-  const allNotes = await listNotes('all');
+  // Find the note to edit by its sheetIndex - use cache for speed
+  const res = await listRemote(true);
+  const allNotes = res.items || [];
   const note = allNotes.find(i => i.sheetIndex === sheetIndex);
   if (!note) return;
 
@@ -143,10 +167,10 @@ async function editNote(sheetIndex) {
   // Scroll to top
   window.scrollTo({ top: 0, behavior: 'smooth' });
 }
-async function listNotes(type){
+async function listNotes(type, useCache = true){
   let items = [];
   try {
-    const res = await listRemote();
+    const res = await listRemote(useCache);
     items = res.items || [];
   } catch(e) {
     console.error("List fetch error:", e);
@@ -193,25 +217,33 @@ function renderList(items,container){
       <div class="header-actions">
         <span class="count">${items.length}</span>
         <button class="delete-all-btn" onclick="deleteSelected()" title="Delete Selected">
-          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="3 6 5 6 21 6"></polyline><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"></path><line x1="10" y1="11" x2="10" y2="17"></line><line x1="14" y1="11" x2="14" y2="17"></line></svg>
+          <svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="3 6 5 6 21 6"></polyline><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"></path><line x1="10" y1="11" x2="10" y2="17"></line><line x1="14" y1="11" x2="14" y2="17"></line></svg>
         </button>
       </div>
     </div>
-    <table class="table">
-      <thead>
-        <tr>
-          <th style="width: 40px;"></th>
-          <th>Date</th>
-          <th>Number</th>
-          <th>Note</th>
-          <th></th>
-        </tr>
-      </thead>
-      <tbody>${rows}</tbody>
-    </table>`;
+    <div class="table-container">
+      <table class="table">
+        <thead>
+          <tr>
+            <th style="width: 40px;"></th>
+            <th>Date</th>
+            <th>Number</th>
+            <th>Note</th>
+            <th style="width: 80px;"></th>
+          </tr>
+        </thead>
+        <tbody>${rows}</tbody>
+      </table>
+    </div>`;
 }
 function setTab(name){state.activeTab=name;document.getElementById("tab-today").classList.toggle("active",name==="today");document.getElementById("tab-all").classList.toggle("active",name==="all");document.getElementById("today-view").classList.toggle("hidden",name!=="today");document.getElementById("all-view").classList.toggle("hidden",name!=="all")}
-async function refresh(){const today=await listNotes('today');const all=await listNotes('all');renderPhones(all);renderList(today,"today-view");renderList(all,"all-view")}
+async function refresh(useCache = true){
+  const today=await listNotes('today', useCache);
+  const all=await listNotes('all', useCache);
+  renderPhones(all);
+  renderList(today,"today-view");
+  renderList(all,"all-view");
+}
 function init(){
   // Remove priority toggle logic since it's not used
   const star = document.getElementById("star");
@@ -223,6 +255,23 @@ function init(){
 
   document.getElementById("tab-today").addEventListener("click", () => setTab("today"));
   document.getElementById("tab-all").addEventListener("click", () => setTab("all"));
+  
+  const pasteBtn = document.getElementById("paste-phone");
+  if (pasteBtn) {
+    pasteBtn.addEventListener("click", async () => {
+      try {
+        const text = await navigator.clipboard.readText();
+        if (text) {
+          // কোনো ফিল্টার বা লিমিট ছাড়া সরাসরি যা কপি করা আছে তা পেস্ট হবে
+          document.getElementById("phone").value = text.trim();
+        }
+      } catch (err) {
+        console.error('Failed to read clipboard contents: ', err);
+        // অনেক সময় ব্রাউজার পারমিশন চায়, তাই সরাসরি ইনপুট বক্সে ফোকাস করে পেস্ট করার চেষ্টা করতে পারে ইউজার
+        document.getElementById("phone").focus();
+      }
+    });
+  }
   
   document.getElementById("save").addEventListener("click",async()=>{
     const phone=document.getElementById("phone").value.trim();
