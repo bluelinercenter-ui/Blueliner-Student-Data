@@ -274,9 +274,18 @@ function init(){
   }
   
   document.getElementById("save").addEventListener("click",async()=>{
-    const phone=document.getElementById("phone").value.trim();
+    const phoneInput=document.getElementById("phone").value.trim();
     const note=document.getElementById("note").value.trim();
     const noteDateInput = document.getElementById("note-date").value;
+    
+    // ফোন নাম্বার ক্লিন করার লজিক (স্পেস, হাইফেন, +88 রিমুভ করা)
+    let phone = phoneInput.replace(/[^\d+]/g, ''); // শুধু ডিজিট এবং '+' রাখা
+    if (phone.startsWith('+88')) {
+      phone = phone.substring(3);
+    } else if (phone.startsWith('88')) {
+      phone = phone.substring(2);
+    }
+    phone = phone.replace(/\D/g, ''); // বাকি সব নন-ডিজিট (যদি থাকে) রিমুভ করা
     
     // Validation: Only Number and Note are required
     if(!phone || !note) {
@@ -292,8 +301,15 @@ function init(){
       Note: note
     };
 
-    // If editing, send the sheetIndex
-    if (state.editingId !== null) {
+    // একই নাম্বারের নোট আগে থেকে আছে কিনা তা চেক করা (যদি নতুন নোট হিসেবে সেভ করা হয়)
+    if (state.editingId === null) {
+      const res = await listRemote(true); // ক্যাশ থেকে দ্রুত লিস্ট পাওয়া
+      const existingNote = res.items.find(n => n.Number === phone);
+      if (existingNote) {
+        payload.sheetIndex = existingNote.sheetIndex; // আগের নোটের ইনডেক্স ব্যবহার করা যাতে সেটি রিপ্লেস হয়
+      }
+    } else {
+      // যদি ইউজার এডিট বাটনে ক্লিক করে এডিট করতে চায়
       payload.sheetIndex = state.editingId;
     }
 
