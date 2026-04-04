@@ -287,85 +287,176 @@ input:focus, textarea:focus {
 }
 
 .table-container {
-  overflow-x: auto;
+  padding: 12px;
 }
 
-.table {
-  width: 100%;
-  border-collapse: collapse;
-}
-
-.table th {
-  background: rgba(255, 255, 255, 0.01);
-  padding: 12px 16px;
-  text-align: left;
-  font-size: 12px;
-  font-weight: 700;
-  color: var(--text-muted);
-  text-transform: uppercase;
-  letter-spacing: 0.05em;
-  border-bottom: 1px solid var(--border);
-}
-
-.table td {
+.note-card {
+  background: rgba(255, 255, 255, 0.03);
+  border: 1px solid var(--border);
+  border-radius: 10px;
   padding: 16px;
-  font-size: 14px;
-  border-bottom: 1px solid var(--border);
-  color: var(--text-main);
-}
-
-.table tr:last-child td {
-  border-bottom: none;
-}
-
-.table tr:hover {
-  background: rgba(255, 255, 255, 0.02);
-}
-
-.note-checkbox {
-  width: 18px;
-  height: 18px;
-  border-radius: 4px;
-  cursor: pointer;
-  accent-color: var(--primary);
-}
-
-.edit-btn {
-  background: rgba(34, 197, 94, 0.1);
-  color: var(--success);
-  border: none;
-  padding: 6px 12px;
-  border-radius: 6px;
-  font-size: 13px;
-  font-weight: 600;
+  margin-bottom: 12px;
   cursor: pointer;
   transition: all 0.2s;
+  position: relative;
 }
 
-.edit-btn:hover {
-  background: var(--success);
-  color: white;
+.note-card:hover {
+  background: rgba(255, 255, 255, 0.05);
+  border-color: var(--primary);
 }
 
-.selected-row {
-  background: rgba(59, 130, 246, 0.05) !important;
+.note-card:active {
+  transform: scale(0.98);
 }
 
-.empty {
-  padding: 40px;
-  text-align: center;
+.card-top {
+  display: flex;
+  justify-content: space-between;
+  align-items: flex-start;
+  margin-bottom: 12px;
+  gap: 12px;
+}
+
+.card-info {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.card-date {
+  font-size: 12px;
   color: var(--text-muted);
-  font-style: italic;
+  font-weight: 500;
 }
 
-.hidden {
+.card-phone {
+  font-size: 15px;
+  font-weight: 700;
+  color: var(--primary);
+}
+
+.card-actions {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+
+.card-note {
+  font-size: 14px;
+  color: var(--text-main);
+  line-height: 1.6;
+  display: -webkit-box;
+  -webkit-line-clamp: 3;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  word-break: break-word;
+}
+
+/* Modal Styles */
+.modal {
+  position: fixed;
+  top: 0;
+  left: 0;
+  width: 100%;
+  height: 100%;
+  background: rgba(0, 0, 0, 0.8);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 1000;
+  padding: 20px;
+  backdrop-filter: blur(4px);
+  transition: opacity 0.3s;
+}
+
+.modal.hidden {
   display: none;
+  opacity: 0;
+}
+
+.modal-content {
+  background: var(--bg-card);
+  width: 100%;
+  max-width: 500px;
+  border-radius: 16px;
+  border: 1px solid var(--border);
+  box-shadow: 0 20px 40px rgba(0, 0, 0, 0.4);
+  animation: slideUp 0.3s ease-out;
+}
+
+@keyframes slideUp {
+  from { transform: translateY(20px); opacity: 0; }
+  to { transform: translateY(0); opacity: 1; }
+}
+
+.modal-header {
+  padding: 16px 20px;
+  border-bottom: 1px solid var(--border);
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+}
+
+.modal-header h3 {
+  margin: 0;
+  font-size: 18px;
+  color: var(--primary);
+}
+
+.close-btn {
+  background: none;
+  border: none;
+  color: var(--text-muted);
+  font-size: 28px;
+  cursor: pointer;
+  line-height: 1;
+}
+
+.modal-body {
+  padding: 20px;
+  max-height: 60vh;
+  overflow-y: auto;
+  font-size: 16px;
+  line-height: 1.7;
+  color: var(--text-main);
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
+.modal-footer {
+  padding: 16px 20px;
+  border-top: 1px solid var(--border);
+  display: flex;
+  justify-content: space-between;
+  font-size: 13px;
+  color: var(--text-muted);
+}
+
+/* Update list section for cards */
+.list-section {
+  background: var(--bg-card);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  padding: 0;
+  overflow: visible; /* Changed from hidden to show shaddows */
+  box-shadow: var(--shadow);
+}
+
+.table-container {
+  display: none; /* Hide old table */
+}
+
+.cards-container {
+  padding: 16px;
 }
 
 @media (max-width: 640px) {
   .app { padding: 12px; }
   .header h1 { font-size: 24px; }
   .form-section { padding: 16px; }
-  .table th, .table td { padding: 12px 10px; font-size: 13px; }
-  .edit-btn { padding: 5px 10px; }
+  .note-card { padding: 14px; }
+  .card-phone { font-size: 14px; }
+  .modal-content { border-radius: 12px; }
 }

@@ -194,41 +194,50 @@ async function listNotes(type, useCache = true){
 function renderPhones(items){const dl=document.getElementById("phone-suggestions");dl.innerHTML="";uniquePhones(items).slice(0,50).forEach(p=>{const o=document.createElement("option");o.value=p;dl.appendChild(o)})}
 function renderList(items,container){
   const el=document.getElementById(container);
-  state.lastItems = items; // Store for re-rendering during selection
+  state.lastItems = items; 
   
-  // ফিল্টারিং লজিক (যদি সার্চ বক্সে কিছু থাকে)
   const searchQuery = state.searchQuery || "";
   const filteredItems = items.filter(i => {
     if (!searchQuery) return true;
     return (i.Number && i.Number.includes(searchQuery));
   });
 
-  if(!filteredItems.length){el.innerHTML=`
-    <div class="list-header">
-      <div class="list-title">${container === "today-view" ? "Today’s Notes" : "All Notes"}</div>
-      ${container === "all-view" ? `
-      <div class="search-container">
-        <input type="text" id="search-input" placeholder="Search number..." value="${searchQuery}">
-      </div>` : ""}
-      <div class="header-actions">
-        <span class="count">0</span>
+  if(!filteredItems.length){
+    el.innerHTML=`
+      <div class="list-header">
+        <div class="list-title">${container === "today-view" ? "Today’s Notes" : "All Notes"}</div>
+        ${container === "all-view" ? `
+        <div class="search-container">
+          <input type="text" id="search-input" placeholder="Search number..." value="${searchQuery}">
+        </div>` : ""}
+        <div class="header-actions">
+          <span class="count">0</span>
+        </div>
       </div>
-    </div>
-    <div class="empty">No notes found</div>`;
-    // সার্চ ইনপুট ইভেন্ট লিসেনার আবার লাগানো
+      <div class="empty">No notes found</div>`;
     if (container === "all-view") attachSearchListener();
     return;
   }
   
-  const rows=filteredItems.map((i)=>{
+  const cards = filteredItems.map((i) => {
     const isSelected = state.selectedIds.has(i.sheetIndex);
-    return `<tr class="${isSelected ? 'selected-row' : ''}">
-      <td><input type="checkbox" class="note-checkbox" ${isSelected ? 'checked' : ''} onchange="toggleSelect(${i.sheetIndex})"></td>
-      <td>${fmtDisplayDate(i.Date)}</td>
-      <td>${i.Number||""}</td>
-      <td>${i.Note||""}</td>
-      <td><div class="row-actions"><button class="edit-btn" onclick="editNote(${i.sheetIndex})">Edit</button></div></td>
-    </tr>`
+    return `
+      <div class="note-card ${isSelected ? 'selected-row' : ''}" onclick="showFullNote(${i.sheetIndex}, event)">
+        <div class="card-top">
+          <div style="display: flex; gap: 12px; align-items: center;">
+            <input type="checkbox" class="note-checkbox" ${isSelected ? 'checked' : ''} 
+                   onclick="event.stopPropagation(); toggleSelect(${i.sheetIndex})">
+            <div class="card-info">
+              <span class="card-date">${fmtDisplayDate(i.Date)}</span>
+              <span class="card-phone">${i.Number || "No Number"}</span>
+            </div>
+          </div>
+          <div class="card-actions">
+            <button class="edit-btn" onclick="event.stopPropagation(); editNote(${i.sheetIndex})">Edit</button>
+          </div>
+        </div>
+        <div class="card-note">${i.Note || "No content"}</div>
+      </div>`;
   }).join("");
   
   let title = "All Notes";
@@ -248,23 +257,37 @@ function renderList(items,container){
         </button>
       </div>
     </div>
-    <div class="table-container">
-      <table class="table">
-        <thead>
-          <tr>
-            <th style="width: 40px;"></th>
-            <th>Date</th>
-            <th>Number</th>
-            <th>Note</th>
-            <th style="width: 80px;"></th>
-          </tr>
-        </thead>
-        <tbody>${rows}</tbody>
-      </table>
+    <div class="cards-container">
+      ${cards}
     </div>`;
     
-    // সার্চ ইনপুট ইভেন্ট লিসেনার লাগানো
     if (container === "all-view") attachSearchListener();
+}
+
+function showFullNote(sheetIndex, event) {
+  // Don't show modal if clicking checkbox or edit button
+  if (event.target.closest('.note-checkbox') || event.target.closest('.edit-btn')) return;
+
+  const note = (state.lastItems || []).find(i => i.sheetIndex === sheetIndex);
+  if (!note) return;
+
+  const modal = document.getElementById("note-modal");
+  const modalBody = document.getElementById("modal-body");
+  const modalDate = document.getElementById("modal-date");
+  const modalPhone = document.getElementById("modal-phone");
+
+  modalBody.textContent = note.Note;
+  modalDate.textContent = fmtDisplayDate(note.Date);
+  modalPhone.textContent = note.Number;
+
+  modal.classList.remove("hidden");
+  document.body.style.overflow = "hidden"; // Prevent scrolling
+}
+
+function closeModal() {
+  const modal = document.getElementById("note-modal");
+  modal.classList.add("hidden");
+  document.body.style.overflow = "auto";
 }
 
 function attachSearchListener() {
@@ -299,6 +322,17 @@ function init(){
 
   document.getElementById("tab-today").addEventListener("click", () => setTab("today"));
   document.getElementById("tab-all").addEventListener("click", () => setTab("all"));
+  
+  // Modal event listeners
+  const closeBtn = document.getElementById("close-modal");
+  if (closeBtn) closeBtn.addEventListener("click", closeModal);
+  
+  const modal = document.getElementById("note-modal");
+  if (modal) {
+    modal.addEventListener("click", (e) => {
+      if (e.target === modal) closeModal();
+    });
+  }
   
   const pasteBtn = document.getElementById("paste-phone");
   if (pasteBtn) {
