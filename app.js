@@ -195,9 +195,32 @@ function renderPhones(items){const dl=document.getElementById("phone-suggestions
 function renderList(items,container){
   const el=document.getElementById(container);
   state.lastItems = items; // Store for re-rendering during selection
-  if(!items.length){el.innerHTML='<div class="empty">No notes</div>';return}
   
-  const rows=items.map((i)=>{
+  // ফিল্টারিং লজিক (যদি সার্চ বক্সে কিছু থাকে)
+  const searchQuery = state.searchQuery || "";
+  const filteredItems = items.filter(i => {
+    if (!searchQuery) return true;
+    return (i.Number && i.Number.includes(searchQuery));
+  });
+
+  if(!filteredItems.length){el.innerHTML=`
+    <div class="list-header">
+      <div class="list-title">${container === "today-view" ? "Today’s Notes" : "All Notes"}</div>
+      ${container === "all-view" ? `
+      <div class="search-container">
+        <input type="text" id="search-input" placeholder="Search number..." value="${searchQuery}">
+      </div>` : ""}
+      <div class="header-actions">
+        <span class="count">0</span>
+      </div>
+    </div>
+    <div class="empty">No notes found</div>`;
+    // সার্চ ইনপুট ইভেন্ট লিসেনার আবার লাগানো
+    if (container === "all-view") attachSearchListener();
+    return;
+  }
+  
+  const rows=filteredItems.map((i)=>{
     const isSelected = state.selectedIds.has(i.sheetIndex);
     return `<tr class="${isSelected ? 'selected-row' : ''}">
       <td><input type="checkbox" class="note-checkbox" ${isSelected ? 'checked' : ''} onchange="toggleSelect(${i.sheetIndex})"></td>
@@ -214,8 +237,12 @@ function renderList(items,container){
   el.innerHTML=`
     <div class="list-header">
       <div class="list-title">${title}</div>
+      ${container === "all-view" ? `
+      <div class="search-container">
+        <input type="text" id="search-input" placeholder="Search number..." value="${searchQuery}">
+      </div>` : ""}
       <div class="header-actions">
-        <span class="count">${items.length}</span>
+        <span class="count">${filteredItems.length}</span>
         <button class="delete-all-btn" onclick="deleteSelected()" title="Delete Selected">
           <svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="3 6 5 6 21 6"></polyline><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"></path><line x1="10" y1="11" x2="10" y2="17"></line><line x1="14" y1="11" x2="14" y2="17"></line></svg>
         </button>
@@ -235,6 +262,23 @@ function renderList(items,container){
         <tbody>${rows}</tbody>
       </table>
     </div>`;
+    
+    // সার্চ ইনপুট ইভেন্ট লিসেনার লাগানো
+    if (container === "all-view") attachSearchListener();
+}
+
+function attachSearchListener() {
+  const searchInput = document.getElementById("search-input");
+  if (searchInput) {
+    // আগের ফোকাস ঠিক রাখার জন্য (যাতে টাইপ করার সময় ফোকাস চলে না যায়)
+    searchInput.focus();
+    searchInput.setSelectionRange(searchInput.value.length, searchInput.value.length);
+    
+    searchInput.addEventListener("input", (e) => {
+      state.searchQuery = e.target.value.trim();
+      renderList(state.lastItems || [], "all-view");
+    });
+  }
 }
 function setTab(name){state.activeTab=name;document.getElementById("tab-today").classList.toggle("active",name==="today");document.getElementById("tab-all").classList.toggle("active",name==="all");document.getElementById("today-view").classList.toggle("hidden",name!=="today");document.getElementById("all-view").classList.toggle("hidden",name!=="all")}
 async function refresh(useCache = true){
