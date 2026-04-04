@@ -18,35 +18,32 @@
 <body>
 <div class="app">
 <header class="header">
-<h1>Student Notes</h1>
-<div class="tabs">
-<button id="tab-today" class="tab active">Today</button>
-<button id="tab-all" class="tab">All</button>
-</div>
-</header>
-<main class="main">
-<section class="form-section">
-<div class="form-row">
-        <label for="note-date">Note Date</label>
-        <input id="note-date" type="date">
+      <h1 class="app-title">Blueliner Education</h1>
+      <div class="tabs">
+        <button id="tab-today" class="tab active">Today</button>
+        <button id="tab-all" class="tab">All</button>
       </div>
-      <div class="form-row">
-        <label for="phone">Number</label>
-        <div class="input-with-icon">
-          <input id="phone" type="tel" placeholder="01XXXXXXXXX" inputmode="numeric" pattern="[0-9]{11}" list="phone-suggestions">
-          <button id="paste-phone" type="button" class="icon-btn" title="Paste number">
-            <svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-              <rect x="9" y="9" width="13" height="13" rx="2" ry="2"></rect>
-              <path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"></path>
-            </svg>
-          </button>
+    </header>
+    <main class="main">
+      <section class="form-section">
+        <div class="form-row">
+          <input id="note-date" type="date" placeholder="Note Date">
         </div>
-        <datalist id="phone-suggestions"></datalist>
-      </div>
-<div class="form-row">
-<label for="note">Note</label>
-<textarea id="note" rows="3" placeholder="Write a note"></textarea>
-</div>
+        <div class="form-row">
+          <div class="input-with-icon">
+            <input id="phone" type="tel" placeholder="Number" inputmode="numeric" pattern="[0-9]{11}" list="phone-suggestions">
+            <button id="paste-phone" type="button" class="icon-btn" title="Paste number">
+              <svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                <rect x="9" y="9" width="13" height="13" rx="2" ry="2"></rect>
+                <path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"></path>
+              </svg>
+            </button>
+          </div>
+          <datalist id="phone-suggestions"></datalist>
+        </div>
+        <div class="form-row">
+          <textarea id="note" rows="3" placeholder="Note"></textarea>
+        </div>
 <div class="form-actions">
 <button id="save" class="save">Save Note</button>
 <div id="status" style="margin-top: 0.5rem; text-align: center; font-size: 0.85rem;"></div>

@@ -1,7 +1,7 @@
 // Google Sheets Web App URL (Replace with your deployed script URL)
 const SCRIPT_URL = "https://script.google.com/macros/s/AKfycbyy977GdY9FWlgA1QPZsA5oWw5W4tAuDlSpxHELFC_09eZZ3ck8sAoGY6Awg-1MfHQb/exec";
 
-const state={priority:false,activeTab:"today",editingId:null,selectedIds:new Set(),lastItems:[]}
+const state={priority:false,activeTab:"today",editingId:null,selectedIds:new Set(),todayItems:[],allItems:[],searchVisible:false}
 
 // LocalStorage Helper
 const cache = {
@@ -139,10 +139,12 @@ function toggleSelect(sheetIndex) {
   } else {
     state.selectedIds.add(sheetIndex);
   }
-  // Refresh the list to show selection - Fast render from last items
-  const container = state.activeTab === 'today' ? 'today-view' : (state.activeTab === 'all' ? 'all-view' : null);
-  if (container) {
-    renderList(state.lastItems || [], container);
+  
+  // সঠিক লিস্ট ব্যবহার করে রেন্ডার করা
+  if (state.activeTab === 'today') {
+    renderList(state.todayItems, "today-view");
+  } else {
+    renderList(state.allItems, "all-view");
   }
 }
 
@@ -194,13 +196,20 @@ async function listNotes(type, useCache = true){
 function renderPhones(items){const dl=document.getElementById("phone-suggestions");dl.innerHTML="";uniquePhones(items).slice(0,50).forEach(p=>{const o=document.createElement("option");o.value=p;dl.appendChild(o)})}
 function renderList(items,container){
   const el=document.getElementById(container);
-  state.lastItems = items; 
   
+  // ডাটা সেভ করা যাতে পরবর্তীতে রি-রেন্ডার করা যায়
+  if (container === "today-view") {
+    state.todayItems = items;
+  } else {
+    state.allItems = items;
+  }
+  
+  // ফিল্টারিং লজিক (শুধুমাত্র All Notes সেকশনের জন্য)
   const searchQuery = state.searchQuery || "";
-  const filteredItems = items.filter(i => {
-    if (!searchQuery) return true;
-    return (i.Number && i.Number.includes(searchQuery));
-  });
+  let filteredItems = items;
+  if (container === "all-view" && searchQuery) {
+    filteredItems = items.filter(i => (i.Number && i.Number.includes(searchQuery)));
+  }
 
   if(!filteredItems.length){
     el.innerHTML=`
@@ -214,7 +223,7 @@ function renderList(items,container){
           <span class="count">0</span>
         </div>
       </div>
-      <div class="empty">No notes found</div>`;
+      <div class="empty">${container === "today-view" ? "No Notes For Today" : "No Notes Found"}</div>`;
     if (container === "all-view") attachSearchListener();
     return;
   }
@@ -225,36 +234,44 @@ function renderList(items,container){
       <div class="note-card ${isSelected ? 'selected-row' : ''}" onclick="showFullNote(${i.sheetIndex}, event)">
         <div class="card-top">
           <div style="display: flex; gap: 12px; align-items: center;">
-            <input type="checkbox" class="note-checkbox" ${isSelected ? 'checked' : ''} 
-                   onclick="event.stopPropagation(); toggleSelect(${i.sheetIndex})">
+            <label class="custom-checkbox" onclick="event.stopPropagation();">
+              <input type="checkbox" ${isSelected ? 'checked' : ''} onchange="toggleSelect(${i.sheetIndex})">
+              <span class="checkmark"></span>
+            </label>
             <div class="card-info">
               <span class="card-date">${fmtDisplayDate(i.Date)}</span>
               <span class="card-phone">${i.Number || "No Number"}</span>
             </div>
           </div>
           <div class="card-actions">
-            <button class="edit-btn" onclick="event.stopPropagation(); editNote(${i.sheetIndex})">Edit</button>
+            <button class="edit-btn-icon" title="Edit Note" onclick="event.stopPropagation(); editNote(${i.sheetIndex})">
+              <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7"></path><path d="M18.5 2.5a2.121 2.121 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z"></path></svg>
+            </button>
           </div>
         </div>
         <div class="card-note">${i.Note || "No content"}</div>
       </div>`;
   }).join("");
   
-  let title = "All Notes";
-  if(container==="today-view") title = "Today’s Notes";
-  
   el.innerHTML=`
-    <div class="list-header">
-      <div class="list-title">${title}</div>
-      ${container === "all-view" ? `
-      <div class="search-container">
-        <input type="text" id="search-input" placeholder="Search number..." value="${searchQuery}">
-      </div>` : ""}
-      <div class="header-actions">
-        <span class="count">${filteredItems.length}</span>
-        <button class="delete-all-btn" onclick="deleteSelected()" title="Delete Selected">
-          <svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="3 6 5 6 21 6"></polyline><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"></path><line x1="10" y1="11" x2="10" y2="17"></line><line x1="14" y1="11" x2="14" y2="17"></line></svg>
-        </button>
+    <div class="list-header ${container === 'all-view' ? 'header-compact' : ''}">
+      ${container === "today-view" ? `<div class="list-title">Today’s Notes</div>` : ""}
+      <div class="header-main-actions">
+        ${container === "all-view" ? `
+        <div class="search-wrapper-dynamic ${state.searchVisible ? 'visible' : ''}">
+          <button class="search-toggle-btn" onclick="toggleSearchBar()" title="Search">
+            <svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="11" cy="11" r="8"></circle><line x1="21" y1="21" x2="16.65" y2="16.65"></line></svg>
+          </button>
+          <div class="search-input-container">
+            <input type="text" id="search-input" placeholder="Search number..." value="${searchQuery}">
+          </div>
+        </div>` : ""}
+        <div class="header-right-group">
+          <span class="count">${filteredItems.length}</span>
+          <button class="delete-all-btn" onclick="deleteSelected()" title="Delete Selected">
+            <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="3 6 5 6 21 6"></polyline><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"></path><line x1="10" y1="11" x2="10" y2="17"></line><line x1="14" y1="11" x2="14" y2="17"></line></svg>
+          </button>
+        </div>
       </div>
     </div>
     <div class="cards-container">
@@ -268,7 +285,8 @@ function showFullNote(sheetIndex, event) {
   // Don't show modal if clicking checkbox or edit button
   if (event.target.closest('.note-checkbox') || event.target.closest('.edit-btn')) return;
 
-  const note = (state.lastItems || []).find(i => i.sheetIndex === sheetIndex);
+  // Find in all items
+  const note = (state.allItems || []).find(i => i.sheetIndex === sheetIndex);
   if (!note) return;
 
   const modal = document.getElementById("note-modal");
@@ -290,26 +308,52 @@ function closeModal() {
   document.body.style.overflow = "auto";
 }
 
+function toggleSearchBar() {
+  state.searchVisible = !state.searchVisible;
+  renderList(state.allItems || [], "all-view");
+  if (state.searchVisible) {
+    setTimeout(() => {
+      const input = document.getElementById("search-input");
+      if (input) input.focus();
+    }, 100);
+  } else {
+    state.searchQuery = ""; // বন্ধ করার সময় সার্চ ক্লিয়ার করা
+    renderList(state.allItems || [], "all-view");
+  }
+}
+
 function attachSearchListener() {
   const searchInput = document.getElementById("search-input");
   if (searchInput) {
-    // আগের ফোকাস ঠিক রাখার জন্য (যাতে টাইপ করার সময় ফোকাস চলে না যায়)
     searchInput.focus();
     searchInput.setSelectionRange(searchInput.value.length, searchInput.value.length);
     
     searchInput.addEventListener("input", (e) => {
       state.searchQuery = e.target.value.trim();
-      renderList(state.lastItems || [], "all-view");
+      renderList(state.allItems || [], "all-view");
     });
   }
 }
-function setTab(name){state.activeTab=name;document.getElementById("tab-today").classList.toggle("active",name==="today");document.getElementById("tab-all").classList.toggle("active",name==="all");document.getElementById("today-view").classList.toggle("hidden",name!=="today");document.getElementById("all-view").classList.toggle("hidden",name!=="all")}
+function setTab(name){
+  state.activeTab=name;
+  document.getElementById("tab-today").classList.toggle("active",name==="today");
+  document.getElementById("tab-all").classList.toggle("active",name==="all");
+  document.getElementById("today-view").classList.toggle("hidden",name!=="today");
+  document.getElementById("all-view").classList.toggle("hidden",name!=="all");
+  
+  // ট্যাব পরিবর্তনের সময় সেই ট্যাবের ডাটা রিফ্রেশ করা
+  refresh(true);
+}
+
 async function refresh(useCache = true){
-  const today=await listNotes('today', useCache);
-  const all=await listNotes('all', useCache);
-  renderPhones(all);
-  renderList(today,"today-view");
-  renderList(all,"all-view");
+  if (state.activeTab === 'today') {
+    const today = await listNotes('today', useCache);
+    renderList(today, "today-view");
+  } else {
+    const all = await listNotes('all', useCache);
+    renderPhones(all); // ফোন সাজেশন অল নোট থেকে আসবে
+    renderList(all, "all-view");
+  }
 }
 function init(){
   // Remove priority toggle logic since it's not used
