@@ -4,8 +4,8 @@
   "description": "Simple student note taking app",
   "start_url": "./index.html",
   "display": "standalone",
-  "background_color": "#121212",
-  "theme_color": "#2b6cb0",
+  "background_color": "#3bb7fe",
+  "theme_color": "#3bb7fe",
   "icons": [
     {
       "src": "Blurliners192.png",
