@@ -1,12 +1,26 @@
-// Google Sheets Web App URL (Replace with your deployed script URL)
-const SCRIPT_URL = "https://script.google.com/macros/s/AKfycbxZwwaMLrVVpPpU1FLmpmdVJDtC1vnZIE_PrzMH4eNDPJGyHIzNYMthR4k6tbRpmgyz/exec";
+// ------------------------------
+// FIREBASE CONFIG - REPLACE WITH YOUR OWN!
+// Get this from Firebase Console > Project Settings > Add App
+// ------------------------------
+const firebaseConfig = {
+  apiKey: "AIzaSyDih5G6dEis-UKN6jWvQH0K3ZEMi3_JNWI",
+  authDomain: "everflow-b8078.firebaseapp.com",
+  projectId: "everflow-b8078",
+  storageBucket: "everflow-b8078.appspot.com",
+  messagingSenderId: "134718334592",
+  appId: "1:134718334592:web:86bcee8c1a691468265"
+};
 
-// Default workers (will be saved to localStorage)
+// Initialize Firebase
+firebase.initializeApp(firebaseConfig);
+const db = firebase.firestore();
+
+// Default workers (will be synced with Firestore)
 const DEFAULT_WORKERS = [
-  { id: 1, name: "Worker 1", code: "2222" },
-  { id: 2, name: "Worker 2", code: "3333" },
-  { id: 3, name: "Worker 3", code: "4444" },
-  { id: 4, name: "Worker 4", code: "5555" }
+  { id: "1", name: "Worker 1", code: "2222" },
+  { id: "2", name: "Worker 2", code: "3333" },
+  { id: "3", name: "Worker 3", code: "4444" },
+  { id: "4", name: "Worker 4", code: "5555" }
 ];
 
 // Helper function to create a unique key for a note
@@ -27,76 +41,318 @@ const state = {
   currentUser: null, // { id, name, code, role: 'admin'|'worker' }
   editingWorkerId: null, // For admin edit worker modal
   selectedWorkerForView: null, // For admin viewing a worker's notes
-  adminActiveSection: "workers", // workers, worker-notes, add-note, all-notes
+  adminActiveSection: "workers", // workers, worker-notes, add-note, all-notes, quick-notes
   selectedWorkersForFilter: new Set(), // Worker IDs selected for filtering
   adminEditingId: null, // For admin note editing
-  adminSelectedIds: new Set() // Now stores note keys (not sheetIndex)
+  adminSelectedIds: new Set(), // Now stores note keys (not sheetIndex)
+  quickNotes: [] // For Quick Notes
 };
 
 // LocalStorage Helper
 const cache = {
-  set: (key, data) => localStorage.setItem(key, JSON.stringify({ data, time: Date.now() })),
+  set: (key, data) => {
+    console.log("cache.set called with key:", key, "data:", data);
+    localStorage.setItem(key, JSON.stringify({ data, time: Date.now() }));
+  },
   get: (key) => {
     const val = localStorage.getItem(key);
+    console.log("cache.get called with key:", key, "raw val:", val);
     if (!val) return null;
     try {
       const parsed = JSON.parse(val);
+      console.log("cache.get parsed val:", parsed);
       if (parsed && parsed.data !== undefined) return parsed.data;
       return parsed;
-    } catch(e) { return null; }
+    } catch(e) { 
+      console.log("cache.get error:", e);
+      return null; 
+    }
   }
 };
 
-// Initialize workers from Google Sheets or defaults
+// ------------------------------
+// FIREBASE / FIRESTORE FUNCTIONS
+// ------------------------------
+
+// Initialize workers from Firestore or defaults
 async function initWorkers() {
   try {
-    const result = await callSheets('listWorkers');
-    if (result && result.ok && result.data && result.data.length > 0) {
-      state.workers = result.data;
-      // Also cache locally for faster loading
+    const snapshot = await db.collection('workers').get();
+    const workersList = [];
+    snapshot.forEach(doc => {
+      workersList.push({ id: doc.id, ...doc.data() });
+    });
+    
+    if (workersList.length > 0) {
+      // Ensure all worker.id are strings
+      state.workers = workersList.map(w => ({ ...w, id: String(w.id) }));
       cache.set('evernote_workers', state.workers);
     } else {
-      // If no workers in sheet, use defaults and save to sheet
+      // Use defaults if no workers in Firestore
       let savedWorkers = cache.get('evernote_workers');
       if (!savedWorkers || !Array.isArray(savedWorkers) || savedWorkers.length === 0) {
         savedWorkers = [...DEFAULT_WORKERS];
       }
-      state.workers = savedWorkers;
-      // Save default workers to sheet
+      // Ensure all worker.id are strings
+      state.workers = savedWorkers.map(w => ({ ...w, id: String(w.id) }));
+      // Save default workers to Firestore
       for (const worker of state.workers) {
-        await callSheets('saveWorker', { id: 0, name: worker.name, code: worker.code });
+        await saveSingleWorker(worker);
       }
     }
   } catch (e) {
-    console.error("Error loading workers:", e);
-    // Fall back to local cache
+    console.error("Error loading workers from Firestore:", e);
+    // Fall back to local cache, then to defaults
     let savedWorkers = cache.get('evernote_workers');
     if (!savedWorkers || !Array.isArray(savedWorkers) || savedWorkers.length === 0) {
       savedWorkers = [...DEFAULT_WORKERS];
-      cache.set('evernote_workers', savedWorkers);
     }
-    state.workers = savedWorkers;
+    // Ensure all worker.id are strings
+    state.workers = savedWorkers.map(w => ({ ...w, id: String(w.id) }));
+    cache.set('evernote_workers', state.workers);
   }
 }
 
-// Save workers to Google Sheets (and cache locally)
+// Save workers to Firestore (and cache locally)
 async function saveWorkers() {
   cache.set('evernote_workers', state.workers);
 }
 
-// Save single worker to Google Sheets
+// Save single worker to Firestore
 async function saveSingleWorker(worker) {
-  await callSheets('saveWorker', worker);
-  await saveWorkers();
+  try {
+    if (worker.id && typeof worker.id === 'string' && worker.id.length > 0) {
+      // Update existing worker
+      await db.collection('workers').doc(worker.id).set({
+        name: worker.name,
+        code: worker.code
+      });
+    } else {
+      // Add new worker
+      const docRef = await db.collection('workers').add({
+        name: worker.name,
+        code: worker.code
+      });
+      worker.id = docRef.id;
+    }
+    await saveWorkers();
+  } catch (e) {
+    console.error("Error saving worker to Firestore:", e);
+    throw e;
+  }
 }
 
-// Delete worker from Google Sheets
+// Delete worker from Firestore
 async function deleteSingleWorker(id) {
   console.log('deleteSingleWorker called with id:', id);
-  const result = await callSheets('deleteWorker', { id: id });
-  console.log('deleteSingleWorker result:', result);
-  await saveWorkers();
+  try {
+    await db.collection('workers').doc(id).delete();
+    // Also delete all notes by this worker? (Optional)
+    // const notesSnapshot = await db.collection('notes').where('Agent', '==', workerName).get();
+    // notesSnapshot.forEach(doc => doc.ref.delete());
+    await saveWorkers();
+  } catch (e) {
+    console.error("Error deleting worker from Firestore:", e);
+    throw e;
+  }
 }
+
+// Get all notes from Firestore
+async function getAllNotes(useCache = true) {
+  if (useCache) {
+    const cachedData = cache.get('notes_list');
+    if (cachedData) {
+      console.log("Using cached notes data...");
+      return cachedData;
+    }
+  }
+
+  console.log("Fetching notes from Firestore...");
+  try {
+    const snapshot = await db.collection('notes').orderBy('Date', 'desc').get();
+    const notesList = [];
+    snapshot.forEach(doc => {
+      notesList.push({
+        id: doc.id,
+        ...doc.data(),
+        sheetIndex: doc.id // For backward compatibility
+      });
+    });
+    cache.set('notes_list', notesList);
+    return notesList;
+  } catch (e) {
+    console.error("Error fetching notes from Firestore:", e);
+    return cache.get('notes_list') || [];
+  }
+}
+
+// Save note to Firestore
+async function saveNoteToFirestore(noteData) {
+  try {
+    if (noteData.id && typeof noteData.id === 'string' && noteData.id.length > 0) {
+      // Update existing note
+      await db.collection('notes').doc(noteData.id).set(noteData);
+    } else {
+      // Add new note
+      const docRef = await db.collection('notes').add(noteData);
+      noteData.id = docRef.id;
+      noteData.sheetIndex = docRef.id;
+    }
+    // Refresh cache
+    await getAllNotes(false);
+  } catch (e) {
+    console.error("Error saving note to Firestore:", e);
+    throw e;
+  }
+}
+
+// Delete note(s) from Firestore
+async function deleteNotesFromFirestore(noteIds) {
+  try {
+    const batch = db.batch();
+    noteIds.forEach(id => {
+      const noteRef = db.collection('notes').doc(id);
+      batch.delete(noteRef);
+    });
+    await batch.commit();
+    // Refresh cache
+    await getAllNotes(false);
+  } catch (e) {
+    console.error("Error deleting notes from Firestore:", e);
+    throw e;
+  }
+}
+
+// Get all Quick Notes from Firestore
+async function getAllQuickNotes(useCache = true) {
+  if (useCache) {
+    const cachedData = cache.get('quick_notes_list');
+    if (cachedData) {
+      console.log("Using cached quick notes data...");
+      return cachedData;
+    }
+  }
+
+  console.log("Fetching quick notes from Firestore...");
+  try {
+    const snapshot = await db.collection('quick_notes').orderBy('Date', 'desc').get();
+    const quickNotesList = [];
+    snapshot.forEach(doc => {
+      const data = doc.data();
+      quickNotesList.push({
+        id: doc.id,
+        ...data,
+        createdAt: data.createdAt || Date.now(), // Default to now if missing
+        lastRemindedAt: data.lastRemindedAt || null // Default to null if missing
+      });
+    });
+    cache.set('quick_notes_list', quickNotesList);
+    state.quickNotes = quickNotesList;
+    return quickNotesList;
+  } catch (e) {
+    console.error("Error fetching quick notes from Firestore:", e);
+    return cache.get('quick_notes_list') || [];
+  }
+}
+
+// Save Quick Note to Firestore
+async function saveQuickNoteToFirestore(quickNoteData) {
+  try {
+    if (quickNoteData.id && typeof quickNoteData.id === 'string' && quickNoteData.id.length > 0) {
+      // Update existing quick note
+      await db.collection('quick_notes').doc(quickNoteData.id).set(quickNoteData);
+    } else {
+      // Add new quick note
+      const docRef = await db.collection('quick_notes').add(quickNoteData);
+      quickNoteData.id = docRef.id;
+    }
+    // Refresh cache
+    await getAllQuickNotes(false);
+  } catch (e) {
+    console.error("Error saving quick note to Firestore:", e);
+    throw e;
+  }
+}
+
+// Delete Quick Note(s) from Firestore
+async function deleteQuickNotesFromFirestore(quickNoteIds) {
+  try {
+    const batch = db.batch();
+    quickNoteIds.forEach(id => {
+      const quickNoteRef = db.collection('quick_notes').doc(id);
+      batch.delete(quickNoteRef);
+    });
+    await batch.commit();
+    // Refresh cache
+    await getAllQuickNotes(false);
+  } catch (e) {
+    console.error("Error deleting quick notes from Firestore:", e);
+    throw e;
+  }
+}
+
+// ------------------------------
+// NOTIFICATION FUNCTIONS
+// ------------------------------
+async function requestNotificationPermission() {
+  if (!('Notification' in window)) {
+    console.log('This browser does not support notifications');
+    return;
+  }
+  const permission = await Notification.requestPermission();
+  console.log('Notification permission:', permission);
+}
+
+function sendNotification(title, body) {
+  if (!('Notification' in window)) {
+    console.log('This browser does not support notifications');
+    return;
+  }
+  if (Notification.permission === 'granted') {
+    new Notification(title, { body, icon: 'logo192.png' });
+  }
+}
+
+async function checkQuickNoteReminders() {
+  try {
+    const quickNotes = await getAllQuickNotes(false);
+    const now = Date.now();
+    const reminderInterval = 2.5 * 60 * 60 * 1000; // 2.5 hours (between 2-3)
+    const updatedNotes = [];
+
+    for (const note of quickNotes) {
+      const lastReminded = note.lastRemindedAt || note.createdAt;
+      if (now - lastReminded >= reminderInterval) {
+        // Send reminder
+        sendNotification(`Quick Note Reminder from ${note.Agent}`, note.Note);
+        // Update lastRemindedAt
+        note.lastRemindedAt = now;
+        updatedNotes.push(note);
+        // Save to Firestore
+        await saveQuickNoteToFirestore(note);
+      }
+    }
+
+    if (updatedNotes.length > 0) {
+      // Update cache
+      const currentNotes = cache.get('quick_notes_list') || [];
+      for (const updatedNote of updatedNotes) {
+        const idx = currentNotes.findIndex(n => n.id === updatedNote.id);
+        if (idx !== -1) {
+          currentNotes[idx] = updatedNote;
+        }
+      }
+      cache.set('quick_notes_list', currentNotes);
+      state.quickNotes = currentNotes;
+    }
+  } catch (e) {
+    console.error('Error checking Quick Note reminders:', e);
+  }
+}
+
+// ------------------------------
+// DATE / UTILITY FUNCTIONS
+// ------------------------------
 
 function fmtDate(d) {
   const x = new Date(d);
@@ -120,149 +376,201 @@ function fmtDisplayDate(d) {
 function todayStr() { return fmtDate(new Date()); }
 function uniquePhones(items) { const s = new Set(); items.forEach(i => { if (i.Number) s.add(i.Number); }); return Array.from(s); }
 
-async function callSheets(action, payload = {}) {
-  const url = `${SCRIPT_URL}`;
-  console.log(`📡 Sending to Sheets: ${action}`, payload);
-
-  try {
-    // Build query string manually for reliability
-    let queryString = `action=${encodeURIComponent(action)}`;
-    for (let key in payload) {
-      queryString += `&${encodeURIComponent(key)}=${encodeURIComponent(String(payload[key]))}`;
-    }
-    
-    const finalUrl = `${url}?${queryString}`;
-    console.log("🔗 Full URL:", finalUrl);
-
-    // For all actions: use normal GET
-    const response = await fetch(finalUrl, {
-      method: 'GET',
-      cache: 'no-cache'
-    });
-    
-    const responseText = await response.text();
-    console.log(`📄 Response:`, responseText);
-
-    // For list: parse JSON response
-    if (action === "list" && response.ok) {
-      const rawData = JSON.parse(responseText);
-      // Convert raw sheet data to our note format - NOW USING DIRECT ROW NUMBERS!
-      const notes = [];
-      for (let i = 1; i < rawData.length; i++) {
-        notes.push({
-          rowNum: i + 1,  // Direct sheet row number (i starts at 1 for data rows, +1 because header is row 1)
-          sheetIndex: i, // Keep for backward compatibility
-          Agent: rawData[i][0] || "",
-          Number: rawData[i][1] || "",
-          Date: rawData[i][2] || "",
-          Note: rawData[i][3] || ""
-        });
-      }
-      console.log("📥 List Data:", notes);
-      return { ok: true, data: notes };
-    }
-
-    // For listWorkers: parse JSON response
-    if (action === "listWorkers" && response.ok) {
-      const rawData = JSON.parse(responseText);
-      // Convert raw sheet data to our worker format
-      const workers = [];
-      for (let i = 1; i < rawData.length; i++) {
-        workers.push({
-          id: parseInt(rawData[i][0]) || i,
-          name: rawData[i][1] || "",
-          code: rawData[i][2] || ""
-        });
-      }
-      console.log("👥 Workers List Data:", workers);
-      return { ok: true, data: workers };
-    }
-
-    return { ok: responseText.includes("OK") };
-  } catch (e) {
-    console.error("❌ Sheets Error:", e);
-    return { ok: false, error: e.message };
-  }
-}
-
-async function saveRemote(payload) {
-  return await callSheets('save', payload);
-}
-
-async function listRemote(useCache = true) {
-  if (useCache) {
-    const cachedData = cache.get('notes_list');
-    if (cachedData) {
-      console.log("Using cached data...");
-      return { items: cachedData, fromCache: true };
-    }
-  }
-
-  console.log("Fetching from Google Sheets...");
-  try {
-    const result = await callSheets('list');
-    if (result.ok && result.data) {
-      cache.set('notes_list', result.data);
-      return { items: result.data || [] };
-    }
-  } catch (e) {
-    console.error("Fetch error:", e);
-  }
+// Export notes to PDF function
+function exportNotesToPDF(notes, title = "Notes") {
+  // Access jsPDF from window (since it's loaded via UMD CDN)
+  const { jsPDF } = window.jspdf;
   
-  const local = cache.get('notes_list');
-  return { items: local || [] };
+  // Create new PDF document
+  const doc = new jsPDF();
+  
+  // Add title
+  doc.setFontSize(18);
+  doc.text(title, 14, 22);
+  
+  // Prepare table data
+  const tableData = notes.map(note => [
+    note.Number || "-",
+    fmtDisplayDate(note.Date) || "-",
+    note.Note || "-"
+  ]);
+  
+  // Add table with columns: Number, Date, Note
+  doc.autoTable({
+    startY: 30,
+    head: [['Number', 'Date', 'Note']],
+    body: tableData,
+    theme: 'grid',
+    styles: { fontSize: 10 },
+    headStyles: { fillColor: [59, 130, 246], textColor: 255, fontWeight: 'bold' }
+  });
+  
+  // Generate filename with current date
+  const filename = `evernote-${todayStr()}.pdf`;
+  
+  // Download the PDF
+  doc.save(filename);
 }
 
-// --- Role-based functions ---
+// Helper function to export Admin's all notes
+function exportAdminAllNotes() {
+  const cachedNotes = cache.get('notes_list') || [];
+  const adminNotes = cachedNotes.filter(note => note.Agent === 'Sabbir');
+  exportNotesToPDF(adminNotes, 'Admin Notes');
+}
 
-// Show access screen
+// Helper function to export Admin's today notes
+function exportAdminTodayNotes() {
+  const todayStrVal = todayStr();
+  const allNotes = cache.get('notes_list') || [];
+  const todayNotes = allNotes.filter(note => {
+    if (!note.Date) return false;
+    if (note.Agent !== 'Sabbir') return false;
+    return fmtDate(note.Date) === todayStrVal;
+  });
+  exportNotesToPDF(todayNotes, "Admin's Today's Notes");
+}
+
+// Helper function to export filtered notes (Admin)
+function exportFilteredNotes() {
+  // Get selected worker names
+  const selectedWorkerNames = state.workers.filter(w => state.selectedWorkersForFilter.has(String(w.id))).map(w => w.name);
+  const allNotes = cache.get('notes_list') || [];
+  const filteredNotes = allNotes.filter(note => selectedWorkerNames.includes(note.Agent));
+  filteredNotes.sort((a, b) => new Date(b.Date) - new Date(a.Date));
+  exportNotesToPDF(filteredNotes, 'Filtered Notes');
+}
+
+// Helper function to export a specific worker's notes (Admin)
+function exportWorkerNotes(workerName) {
+  const allNotes = cache.get('notes_list') || [];
+  const workerNotes = allNotes.filter(note => note.Agent === workerName);
+  exportNotesToPDF(workerNotes, `${workerName}'s Notes`);
+}
+
+// Helper functions for worker's own notes
+function exportWorkerTodayNotes() {
+  const title = state.currentUser ? `${state.currentUser.name}'s Today's Notes` : "Today's Notes";
+  exportNotesToPDF(state.todayItems, title);
+}
+
+function exportWorkerAllNotes() {
+  const title = state.currentUser ? `${state.currentUser.name}'s Notes` : "Notes";
+  exportNotesToPDF(state.allItems, title);
+}
+
+// ------------------------------
+// ACCESS CODE / LOGIN
+// ------------------------------
+
+let enteredCode = '';
+
+function updateCodeDisplay() {
+  const display = document.getElementById('code-display');
+  if (!display) return;
+  display.textContent = '•'.repeat(enteredCode.length);
+  if (enteredCode.length === 0) {
+    display.textContent = '••••';
+  }
+}
+
+async function checkAndLogin() {
+  // Only check when exactly 4 digits are entered
+  if (enteredCode.length !== 4) return;
+
+  // Check for admin first - works regardless of workers
+  if (enteredCode === '0000') {
+    state.currentUser = { id: 0, name: 'Sabbir', code: '0000', role: 'admin' };
+    saveLoginData(state.currentUser);
+    enteredCode = '';
+    updateCodeDisplay();
+    showAdminDashboard();
+    return;
+  }
+
+  // Check for worker
+  const localWorker = state.workers.find(w => String(w.code) === String(enteredCode));
+  if (localWorker) {
+    state.currentUser = { ...localWorker, role: 'worker' };
+    saveLoginData(state.currentUser);
+    enteredCode = '';
+    updateCodeDisplay();
+    showWorkerDashboard();
+    return;
+  }
+
+  // Invalid code - just clear without warning
+  setTimeout(() => {
+    enteredCode = '';
+    updateCodeDisplay();
+  }, 300);
+}
+
+function saveLoginData(user) {
+  const loginData = { user, timestamp: Date.now() };
+  localStorage.setItem('evernote_login', JSON.stringify(loginData));
+}
+
+function clearLoginData() { localStorage.removeItem('evernote_login'); }
+
+function logout() {
+  state.currentUser = null;
+  state.selectedWorkerForView = null;
+  clearLoginData();
+  const allTitleElements = document.querySelectorAll('.app-title');
+  allTitleElements.forEach(el => {
+    if (el.closest('#access-screen') || el.closest('#worker-dashboard')) {
+      el.textContent = 'EverNote';
+    } else if (el.closest('#admin-dashboard')) {
+      el.textContent = 'EverNote Admin';
+    }
+  });
+  showAccessScreen();
+}
+
+// ------------------------------
+// SCREEN / DASHBOARD FUNCTIONS
+// ------------------------------
+
 function showAccessScreen() {
   document.getElementById('access-screen').classList.remove('hidden');
   document.getElementById('worker-dashboard').classList.add('hidden');
   document.getElementById('admin-dashboard').classList.add('hidden');
   state.currentUser = null;
-  document.getElementById('access-code').value = '';
-  document.getElementById('access-status').textContent = '';
-  
-  // Reset access screen title
+  enteredCode = '';
+  updateCodeDisplay();
   const accessTitle = document.querySelector('#access-screen .app-title');
   if (accessTitle) accessTitle.textContent = 'EverNote';
 }
 
-// Show worker dashboard
 function showWorkerDashboard() {
   document.getElementById('access-screen').classList.add('hidden');
   document.getElementById('worker-dashboard').classList.remove('hidden');
   document.getElementById('admin-dashboard').classList.add('hidden');
-  
-  // Update title with worker name
   if (state.currentUser && state.currentUser.name) {
     const titleElements = document.querySelectorAll('#worker-dashboard .app-title');
     titleElements.forEach(el => {
       el.textContent = `EverNote (${state.currentUser.name})`;
     });
   }
-  
-  // First load local data immediately
-  refresh(true);
-  
-  // Then sync with Google Sheets in background
+  // Render immediately from cache
+  renderWorkerTodayNotes();
+  renderWorkerAllNotes();
+  // Then sync in background
   setTimeout(async () => {
-    await refresh(false);
+    await getAllNotes(false);
+    renderWorkerTodayNotes();
+    renderWorkerAllNotes();
   }, 100);
 }
 
-// Show admin dashboard
 function showAdminDashboard() {
   document.getElementById('access-screen').classList.add('hidden');
   document.getElementById('worker-dashboard').classList.add('hidden');
   document.getElementById('admin-dashboard').classList.remove('hidden');
-  
-  // Set default section to Add Note
   selectAdminMenuItem('add-note');
   renderWorkerList();
-  
-  // First render all admin views from local cache immediately
+  // Render immediately from cache
   renderAdminTodayNotes();
   renderAllAdminNotes();
   renderWorkerFilterList();
@@ -270,11 +578,11 @@ function showAdminDashboard() {
   if (state.selectedWorkerForView) {
     renderAdminWorkerNotes(state.selectedWorkerForView.name);
   }
-  
-  // Then sync with Google Sheets in background
+  // Sync in background
   setTimeout(async () => {
-    await refreshAdminData();
-    // Re-render after sync
+    await initWorkers();
+    await getAllNotes(false);
+    renderWorkerList();
     renderAdminTodayNotes();
     renderAllAdminNotes();
     renderWorkerFilterList();
@@ -285,73 +593,65 @@ function showAdminDashboard() {
   }, 100);
 }
 
-// Open Admin Menu
+// ------------------------------
+// ADMIN MENU / NAVIGATION
+// ------------------------------
+
 function openAdminMenu() {
   document.getElementById('admin-menu-overlay').classList.remove('hidden');
   document.getElementById('admin-side-menu').classList.remove('hidden');
 }
-
-// Close Admin Menu
 function closeAdminMenu() {
   document.getElementById('admin-menu-overlay').classList.add('hidden');
   document.getElementById('admin-side-menu').classList.add('hidden');
 }
+function openWorkerMenu() {
+  document.getElementById('worker-menu-overlay').classList.remove('hidden');
+  document.getElementById('worker-side-menu').classList.remove('hidden');
+}
+function closeWorkerMenu() {
+  document.getElementById('worker-menu-overlay').classList.add('hidden');
+  document.getElementById('worker-side-menu').classList.add('hidden');
+}
 
-// Select Admin Menu Item
 function selectAdminMenuItem(section) {
-  // Update menu active state
   document.getElementById('menu-item-add-note').classList.toggle('active', section === 'add-note');
+  document.getElementById('menu-item-all-notes').classList.toggle('active', section === 'all-notes');
   document.getElementById('menu-item-workers').classList.toggle('active', section === 'workers');
   document.getElementById('menu-item-worker-notes').classList.toggle('active', section === 'worker-notes');
-  
-  // Close menu
+  document.getElementById('menu-item-quick-notes').classList.toggle('active', section === 'quick-notes');
   closeAdminMenu();
-  
-  // Show/hide sections
   document.getElementById('admin-worker-section').classList.toggle('hidden', section !== 'workers');
   document.getElementById('admin-worker-notes-section').classList.toggle('hidden', section !== 'worker-notes');
   document.getElementById('admin-note-section').classList.toggle('hidden', section !== 'add-note');
   document.getElementById('admin-all-notes-section').classList.toggle('hidden', section !== 'all-notes');
-  
-  // Show/hide tabs (only for add-note and all-notes)
+  document.getElementById('admin-quick-notes-section').classList.toggle('hidden', section !== 'quick-notes');
   const tabsContainer = document.getElementById('admin-tabs-container');
-  tabsContainer.classList.toggle('hidden', !['add-note', 'all-notes'].includes(section));
-  
-  // Update active tab in the tab bar
-  if (['add-note', 'all-notes'].includes(section)) {
+  tabsContainer.classList.toggle('hidden', !['add-note', 'all-notes', 'quick-notes'].includes(section));
+  if (['add-note', 'all-notes', 'quick-notes'].includes(section)) {
     document.getElementById('admin-tab-add-note').classList.toggle('active', section === 'add-note');
     document.getElementById('admin-tab-all-notes').classList.toggle('active', section === 'all-notes');
+    document.getElementById('admin-tab-quick-notes').classList.toggle('active', section === 'quick-notes');
   }
-  
-  // Update state
   state.adminActiveSection = section;
-  
-  // Render content based on section
   if (section === 'worker-notes') {
-    state.selectedWorkersForFilter.clear(); // Clear previous selections
+    state.selectedWorkersForFilter.clear();
     renderWorkerFilterList();
     renderFilteredNotes();
   }
-  if (section === 'add-note') {
-    renderAdminTodayNotes();
-  }
-  if (section === 'all-notes') {
-    renderAllAdminNotes();
-  }
+  if (section === 'add-note') renderAdminTodayNotes();
+  if (section === 'all-notes') renderAllAdminNotes();
+  if (section === 'quick-notes') renderAdminQuickNotes();
 }
 
-
+// ------------------------------
+// ADMIN NOTE FUNCTIONS
+// ------------------------------
 
 function toggleAdminSelect(noteKey) {
   console.log("toggleAdminSelect called with noteKey:", noteKey);
-  if (state.adminSelectedIds.has(noteKey)) {
-    state.adminSelectedIds.delete(noteKey);
-    console.log("Removed from selection, now:", Array.from(state.adminSelectedIds));
-  } else {
-    state.adminSelectedIds.add(noteKey);
-    console.log("Added to selection, now:", Array.from(state.adminSelectedIds));
-  }
-
+  if (state.adminSelectedIds.has(noteKey)) state.adminSelectedIds.delete(noteKey);
+  else state.adminSelectedIds.add(noteKey);
   renderAdminTodayNotes();
   renderAllAdminNotes();
   renderWorkerFilterList();
@@ -361,7 +661,6 @@ function toggleAdminSelect(noteKey) {
   }
 }
 
-// Delete a single admin note
 async function deleteSingleAdminNote(noteKey) {
   state.adminSelectedIds.clear();
   state.adminSelectedIds.add(noteKey);
@@ -374,7 +673,7 @@ function renderAdminNoteCard(i, isTodayView = false) {
   const isAdminNote = i.Agent === "Sabbir";
   const isAllView = !isTodayView;
   return `
-    <div class="note-card ${isSelected ? 'selected-row' : ''}" onclick="showFullNote(${i.sheetIndex}, event)">
+    <div class="note-card ${isSelected ? 'selected-row' : ''}" onclick="showFullNote('${i.id || i.sheetIndex}', event)">
       <div class="card-top">
         <div style="display: flex; gap: 12px; align-items: center;">
           ${isAllView ? `
@@ -399,7 +698,7 @@ function renderAdminNoteCard(i, isTodayView = false) {
         </div>
         ${isAdminNote ? `
           <div class="card-actions" style="gap: 8px;">
-            <button class="edit-btn-icon" title="Edit Note" onclick="event.stopPropagation(); editAdminNote(${i.sheetIndex})">
+            <button class="edit-btn-icon" title="Edit Note" onclick="event.stopPropagation(); editAdminNote('${i.id || i.sheetIndex}')">
               <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7"></path><path d="M18.5 2.5a2.121 2.121 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z"></path></svg>
             </button>
           </div>
@@ -409,20 +708,16 @@ function renderAdminNoteCard(i, isTodayView = false) {
     </div>`;
 }
 
-// Render Admin Today's Notes (Admin Only - Sabbir)
 async function renderAdminTodayNotes() {
   const todayStrVal = todayStr();
   const allNotes = cache.get('notes_list') || [];
-  
   const todayNotes = allNotes.filter(note => {
     if (!note.Date) return false;
-    if (note.Agent !== 'Sabbir') return false; // Only Admin's notes
+    if (note.Agent !== 'Sabbir') return false;
     return fmtDate(note.Date) === todayStrVal;
   });
-  
   const container = document.getElementById('admin-today-notes-container');
   if (!container) return;
-  
   const headerHtml = `
     <div class="list-header">
       <div class="list-title">Today's Notes</div>
@@ -430,294 +725,152 @@ async function renderAdminTodayNotes() {
         <span class="count">${todayNotes.length}</span>
       </div>
     </div>`;
-  
   if (!todayNotes.length) {
     container.innerHTML = headerHtml + '<div class="empty">No notes today</div>';
     return;
   }
-  
   container.innerHTML = headerHtml + `
     <div class="cards-container">
       ${todayNotes.map(note => renderAdminNoteCard(note, true)).join('')}
     </div>`;
 }
 
-// Render Worker Filter List
-function renderWorkerFilterList() {
-  const container = document.getElementById('worker-filter-list');
-  if (!container) return;
-  
-  const allNotes = cache.get('notes_list') || [];
-  
-  const workerItemsHtml = state.workers.map(worker => {
-    // Count notes for this worker
-    const workerNoteCount = allNotes.filter(note => note.Agent === worker.name).length;
-    const isSelected = state.selectedWorkersForFilter.has(worker.id);
-    
-    return `
-      <div class="worker-filter-item ${isSelected ? 'selected' : ''}" onclick="toggleWorkerFilter(${worker.id})">
-        <div class="worker-filter-info">
-          <div class="worker-filter-name">${worker.name}</div>
-          <div class="worker-filter-count">${workerNoteCount} notes</div>
-        </div>
-        <div style="display: flex; align-items: center;">
-          <label class="custom-checkbox" style="width: 24px; height: 24px;">
-            <input type="checkbox" ${isSelected ? 'checked' : ''} onclick="event.stopPropagation(); toggleWorkerFilter(${worker.id});">
-            <span class="checkmark"></span>
-          </label>
-        </div>
-      </div>
-    `;
-  }).join('');
-  
-  container.innerHTML = workerItemsHtml;
-}
-
-// Toggle Worker Filter
-function toggleWorkerFilter(workerId) {
-  if (state.selectedWorkersForFilter.has(workerId)) {
-    state.selectedWorkersForFilter.delete(workerId);
-  } else {
-    state.selectedWorkersForFilter.add(workerId);
-  }
-  
-  renderWorkerFilterList();
-  renderFilteredNotes();
-}
-
-// Render Filtered Notes
-function renderFilteredNotes() {
-  const container = document.getElementById('filtered-notes-container');
-  if (!container) return;
-  
-  const allNotes = cache.get('notes_list') || [];
-  
-  // Get selected worker names
-  const selectedWorkerNames = state.workers
-    .filter(worker => state.selectedWorkersForFilter.has(worker.id))
-    .map(worker => worker.name);
-  
-  // If no workers selected
-  if (selectedWorkerNames.length === 0) {
-    container.innerHTML = '<div class="empty">Please select workers to view their notes</div>';
-    return;
-  }
-  
-  // Filter notes
-  const filteredNotes = allNotes.filter(note => {
-    return selectedWorkerNames.includes(note.Agent);
-  });
-  
-  // Sort notes by date (newest first)
-  filteredNotes.sort((a, b) => new Date(b.Date) - new Date(a.Date));
-  
-  const headerHtml = `
-    <div class="list-header">
-      <div class="list-title">Filtered Notes</div>
-      <div class="header-right-group">
-        <span class="count">${filteredNotes.length}</span>
-        <button class="delete-all-btn" onclick="deleteSelectedAdmin()" title="Delete Selected">
-          <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="3 6 5 6 21 6"></polyline><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"></path><line x1="10" y1="11" x2="10" y2="17"></line><line x1="14" y1="11" x2="14" y2="17"></line></svg>
-        </button>
-      </div>
-    </div>`;
-  
-  if (!filteredNotes.length) {
-    container.innerHTML = headerHtml + '<div class="empty">No notes found for selected workers</div>';
-    return;
-  }
-  
-  container.innerHTML = headerHtml + `
-    <div class="cards-container">
-      ${filteredNotes.map(note => renderAdminNoteCard(note, false)).join('')}
-    </div>`;
-}
-
-// Render all notes for admin
 async function renderAllAdminNotes() {
-  // 1. First render from cache immediately
   const cachedNotes = cache.get('notes_list') || [];
   let allNotes = cachedNotes.filter(note => note.Agent === 'Sabbir');
-  
   const container = document.getElementById('admin-all-notes-container');
   if (!container) return;
-  
   const headerHtml = `
     <div class="list-header">
       <div class="list-title">All Notes</div>
       <div class="header-right-group">
         <span class="count">${allNotes.length}</span>
+        <button class="icon-btn" onclick="exportAdminAllNotes()" title="Data Export">
+          <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"></path><polyline points="7 10 12 15 17 10"></polyline><line x1="12" y1="15" x2="12" y2="3"></line></svg>
+        </button>
         <button class="delete-all-btn" onclick="deleteSelectedAdmin()" title="Delete Selected">
           <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="3 6 5 6 21 6"></polyline><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"></path><line x1="10" y1="11" x2="10" y2="17"></line><line x1="14" y1="11" x2="14" y2="17"></line></svg>
         </button>
       </div>
     </div>`;
-  
   if (!allNotes.length) {
     container.innerHTML = headerHtml + '<div class="empty">No notes found</div>';
   } else {
     container.innerHTML = headerHtml + `
       <div class="cards-container">
         ${allNotes.map(note => renderAdminNoteCard(note, false)).join('')}
-      </div>
-    `;
-  }
-  
-  // 2. Then sync fresh data in the background
-  setTimeout(async () => {
-    const result = await listRemote(false);
-    let freshNotes = result.items || [];
-    freshNotes = freshNotes.filter(note => note.Agent === 'Sabbir');
-    
-    const freshHeaderHtml = `
-      <div class="list-header">
-        <div class="list-title">All Notes</div>
-        <div class="header-right-group">
-          <span class="count">${freshNotes.length}</span>
-          <button class="delete-all-btn" onclick="deleteSelectedAdmin()" title="Delete Selected">
-            <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="3 6 5 6 21 6"></polyline><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"></path><line x1="10" y1="11" x2="10" y2="17"></line><line x1="14" y1="11" x2="14" y2="17"></line></svg>
-          </button>
-        </div>
       </div>`;
-    
-    if (!freshNotes.length) {
-      container.innerHTML = freshHeaderHtml + '<div class="empty">No notes found</div>';
-    } else {
-      container.innerHTML = freshHeaderHtml + `
-        <div class="cards-container">
-          ${freshNotes.map(note => renderAdminNoteCard(note, false)).join('')}
-        </div>
-      `;
-    }
-  }, 100);
+  }
 }
 
-// Save admin note (fixed agent: Sabbir)
 async function saveAdminNote() {
+  console.log("saveAdminNote called!");
   const phoneInput = document.getElementById('admin-phone').value.trim();
   const noteInput = document.getElementById('admin-note').value.trim();
   const dateInput = document.getElementById('admin-note-date').value;
   const statusEl = document.getElementById('admin-status');
   const saveBtn = document.getElementById('admin-save-btn');
 
-  // Clean phone number
+  console.log("Admin inputs: phone:", phoneInput, "note:", noteInput, "date:", dateInput);
+
   let phone = phoneInput.replace(/[^\d+]/g, '');
-  if (phone.startsWith('+88')) {
-    phone = phone.substring(3);
-  } else if (phone.startsWith('88')) {
-    phone = phone.substring(2);
-  }
+  if (phone.startsWith('+88')) phone = phone.substring(3);
+  else if (phone.startsWith('88')) phone = phone.substring(2);
   phone = phone.replace(/\D/g, '');
+
+  console.log("Admin processed phone:", phone);
 
   if (!phone || !noteInput) {
     alert('Please fill Number and Note fields!');
     return;
   }
-
   const finalDate = dateInput || fmtDate(new Date());
-  
-  // Get current notes
+
   let currentNotes = cache.get('notes_list') || [];
   let existingNote = null;
-  
+  let isNew = false;
   if (state.adminEditingId !== null) {
-    existingNote = currentNotes.find(n => n.sheetIndex === state.adminEditingId);
+    existingNote = currentNotes.find(n => (n.id === state.adminEditingId || n.sheetIndex === state.adminEditingId));
   }
-  
-  // Prepare save payload
+
   const savePayload = {
     Agent: "Sabbir",
     Date: finalDate,
     Number: phone,
     Note: noteInput
   };
-  
-  if (existingNote && existingNote.rowNum) {
-    savePayload.rowNum = existingNote.rowNum;
-  }
 
-  // Optimistic UI update
+  // Optimistic UI
   if (existingNote) {
-    const index = currentNotes.findIndex(n => n.sheetIndex === state.adminEditingId);
-    if (index !== -1) {
+    const idx = currentNotes.findIndex(n => (n.id === state.adminEditingId || n.sheetIndex === state.adminEditingId));
+    if (idx !== -1) {
+      savePayload.id = existingNote.id;
       savePayload.sheetIndex = existingNote.sheetIndex;
-      savePayload.rowNum = existingNote.rowNum;
-      currentNotes[index] = savePayload;
+      currentNotes[idx] = { ...existingNote, ...savePayload };
     }
   } else {
-    // Add new note
-    savePayload.sheetIndex = Date.now();
+    isNew = true;
+    savePayload.id = Date.now().toString(); // Temp ID
+    savePayload.sheetIndex = savePayload.id;
     currentNotes.unshift(savePayload);
   }
   cache.set('notes_list', currentNotes);
-
-  // Refresh Today's Notes immediately
   renderAdminTodayNotes();
 
-  statusEl.textContent = 'Syncing with Sheets...';
-  statusEl.style.color = '#3b82f6';
+  statusEl.textContent = "Syncing...";
+  statusEl.style.color = "#3b82f6";
 
-  // Sync with Google Sheets
-  const result = await callSheets('save', savePayload);
-  if (result.ok) {
-    statusEl.textContent = 'Synced with Google Sheets!';
-    statusEl.style.color = 'green';
-    setTimeout(() => statusEl.textContent = '', 3000);
-    await refreshAdminData();
+  // Sync to Firestore
+  try {
+    await saveNoteToFirestore(savePayload);
+    // Send notification if it's a new Today's Note
+    if (isNew && fmtDate(savePayload.Date) === todayStr()) {
+      sendNotification(`New Note from ${savePayload.Agent}`, savePayload.Note);
+    }
+    statusEl.textContent = "Saved!";
+    statusEl.style.color = "green";
     renderAdminTodayNotes();
-  } else {
-    statusEl.textContent = 'Sync failed, but saved locally!';
-    statusEl.style.color = 'orange';
+    renderAllAdminNotes();
+  } catch (e) {
+    statusEl.textContent = "Saved locally, sync failed!";
+    statusEl.style.color = "orange";
   }
+  setTimeout(() => statusEl.textContent = "", 3000);
 
-  // Clear form and reset editing state
-  document.getElementById('admin-phone').value = '';
-  document.getElementById('admin-note').value = '';
-  document.getElementById('admin-note-date').value = '';
+  document.getElementById('admin-phone').value = "";
+  document.getElementById('admin-note').value = "";
+  document.getElementById('admin-note-date').value = "";
   state.adminEditingId = null;
-  saveBtn.textContent = 'Save Note';
-  saveBtn.classList.remove('editing');
+  saveBtn.textContent = "Save Note";
+  saveBtn.classList.remove("editing");
 }
 
-// Edit admin note
-async function editAdminNote(sheetIndex) {
-  const res = await listRemote(true);
-  const allNotes = res.items || [];
-  const note = allNotes.find(i => i.sheetIndex === sheetIndex);
+async function editAdminNote(id) {
+  const allNotes = cache.get('notes_list') || await getAllNotes(true);
+  const note = allNotes.find(i => (i.id === id || i.sheetIndex === id));
   if (!note) return;
-
-  if (note.Date) {
-    document.getElementById("admin-note-date").value = fmtDate(note.Date);
-  }
-
+  if (note.Date) document.getElementById("admin-note-date").value = fmtDate(note.Date);
   document.getElementById("admin-phone").value = note.Number;
   document.getElementById("admin-note").value = note.Note;
-
-  state.adminEditingId = sheetIndex;
+  state.adminEditingId = id;
   const saveBtn = document.getElementById("admin-save-btn");
   saveBtn.textContent = "Update Note";
   saveBtn.classList.add("editing");
-
   window.scrollTo({ top: 0, behavior: 'smooth' });
 }
 
 async function deleteSelectedAdmin() {
-  console.log("deleteSelectedAdmin called! Selected keys:", Array.from(state.adminSelectedIds));
   if (state.adminSelectedIds.size === 0) {
     alert("Please select at least one note to delete.");
     return;
   }
-
   if (!confirm(`Are you sure you want to delete ${state.adminSelectedIds.size} selected note(s)?`)) return;
 
   const statusEl = document.getElementById("admin-status");
-
-  // 1. FIRST DELETE FROM LOCAL CACHE INSTANTLY!
   const deleteKeys = new Set(state.adminSelectedIds);
   const currentNotes = cache.get('notes_list') || [];
-  const filteredNotes = currentNotes.filter(n => !state.adminSelectedIds.has(getNoteKey(n)));
+  const filteredNotes = currentNotes.filter(n => !deleteKeys.has(getNoteKey(n)));
   cache.set('notes_list', filteredNotes);
-  // Update UI immediately!
   state.adminSelectedIds.clear();
   renderAdminTodayNotes();
   renderAllAdminNotes();
@@ -726,64 +879,19 @@ async function deleteSelectedAdmin() {
   if (state.selectedWorkerForView) {
     renderAdminWorkerNotes(state.selectedWorkerForView.name);
   }
+
   statusEl.textContent = "Deleting...";
   statusEl.style.color = "blue";
 
-  // 2. NOW SYNC WITH GOOGLE SHEETS IN BACKGROUND!
+  // Sync in background
   (async () => {
     try {
-      const res = await fetch(SCRIPT_URL + '?action=list', { cache: 'no-cache' });
-      const rawData = await res.json();
-      const allNotes = [];
-      for (let i = 1; i < rawData.length; i++) {
-        allNotes.push({
-          rowNum: i + 1,
-          sheetIndex: i,
-          Agent: rawData[i][0] || "",
-          Number: rawData[i][1] || "",
-          Date: rawData[i][2] || "",
-          Note: rawData[i][3] || ""
-        });
+      const freshNotes = await getAllNotes(false);
+      const selectedNotes = freshNotes.filter(n => deleteKeys.has(getNoteKey(n)));
+      const noteIdsToDelete = selectedNotes.map(n => n.id).filter(id => id);
+      if (noteIdsToDelete.length > 0) {
+        await deleteNotesFromFirestore(noteIdsToDelete);
       }
-      const selectedNotes = allNotes.filter(n => deleteKeys.has(getNoteKey(n)));
-      let successCount = 0;
-      for (let i = 0; i < selectedNotes.length; i++) {
-        const targetNote = selectedNotes[i];
-        const currentRes = await fetch(SCRIPT_URL + '?action=list', { cache: 'no-cache' });
-        const currentRawData = await currentRes.json();
-        let currentRowNum = null;
-        for (let j = 1; j < currentRawData.length; j++) {
-          if (
-            currentRawData[j][0] === targetNote.Agent &&
-            currentRawData[j][1] === targetNote.Number &&
-            currentRawData[j][2] === targetNote.Date &&
-            currentRawData[j][3] === targetNote.Note
-          ) {
-            currentRowNum = j + 1;
-            break;
-          }
-        }
-        if (currentRowNum) {
-          const deleteRes = await fetch(`${SCRIPT_URL}?action=delete&rowNum=${currentRowNum}`, { cache: 'no-cache' });
-          const deleteResult = await deleteRes.text();
-          if (deleteResult.includes('OK')) successCount++;
-        }
-      }
-      const finalRes = await fetch(SCRIPT_URL + '?action=list', { cache: 'no-cache' });
-      const finalRawData = await finalRes.json();
-      const finalNotes = [];
-      for (let i = 1; i < finalRawData.length; i++) {
-        finalNotes.push({
-          rowNum: i + 1,
-          sheetIndex: i,
-          Agent: finalRawData[i][0] || "",
-          Number: finalRawData[i][1] || "",
-          Date: finalRawData[i][2] || "",
-          Note: finalRawData[i][3] || ""
-        });
-      }
-      cache.set('notes_list', finalNotes);
-      // Re-render UI with final data
       renderAdminTodayNotes();
       renderAllAdminNotes();
       renderWorkerFilterList();
@@ -791,211 +899,335 @@ async function deleteSelectedAdmin() {
       if (state.selectedWorkerForView) {
         renderAdminWorkerNotes(state.selectedWorkerForView.name);
       }
-      if (successCount === selectedNotes.length) {
-        statusEl.textContent = "Successfully deleted!";
-        statusEl.style.color = "green";
-      }
-      setTimeout(() => statusEl.textContent = "", 3000);
+      statusEl.textContent = "Deleted!";
+      statusEl.style.color = "green";
     } catch (e) {
-      console.error("Background delete failed:", e);
       statusEl.textContent = "Deleted locally, sync failed!";
       statusEl.style.color = "orange";
-      setTimeout(() => statusEl.textContent = "", 3000);
     }
+    setTimeout(() => statusEl.textContent = "", 3000);
   })();
 }
 
-// Save login data to localStorage
-function saveLoginData(user) {
-  const loginData = {
-    user,
-    timestamp: Date.now()
-  };
-  localStorage.setItem('evernote_login', JSON.stringify(loginData));
+// ------------------------------
+// ADMIN WORKER FUNCTIONS
+// ------------------------------
+
+function renderWorkerList() {
+  const container = document.getElementById('worker-list');
+  if (!container) return;
+  const workers = state.workers;
+
+  if (!workers.length) {
+    container.innerHTML = '<div class="empty">No workers found</div>';
+    return;
+  }
+
+  container.innerHTML = `
+    <div class="list-header" style="margin-bottom: 16px;">
+      <div class="list-title">Workers</div>
+    </div>
+    <div class="cards-container">
+      ${workers.map(w => `
+        <div class="note-card" style="cursor: pointer;" onclick="viewWorkerNotes('${w.id}', '${w.name.replace(/'/g, "\\'")}')">
+          <div class="card-top">
+            <div class="card-info">
+              <div style="font-size: 16px; font-weight: 700; color: var(--text);">${w.name}</div>
+              <div style="font-size: 13px; color: var(--text-muted); margin-top: 4px;">Code: ${w.code}</div>
+            </div>
+            <div class="card-actions">
+              <button class="edit-btn-icon" title="Edit Worker" onclick="event.stopPropagation(); editWorker('${w.id}')">
+                <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7"></path><path d="M18.5 2.5a2.121 2.121 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z"></path></svg>
+              </button>
+            </div>
+          </div>
+        </div>
+      `).join('')}
+    </div>`;
 }
 
-// Handle access code submission
-async function handleAccessCode() {
-  const code = document.getElementById('access-code').value.trim();
-  const statusEl = document.getElementById('access-status');
-
-  if (!code) {
-    statusEl.textContent = 'Please enter an access code';
-    statusEl.style.color = 'var(--danger)';
+async function addWorker() {
+  const name = document.getElementById('new-worker-name').value.trim();
+  const code = document.getElementById('new-worker-code').value.trim();
+  if (!name || !code) {
+    alert('Please fill worker name and code!');
     return;
   }
+  const newWorker = { id: Date.now().toString(), name, code };
+  state.workers.push(newWorker);
+  cache.set('evernote_workers', state.workers);
+  renderWorkerList();
+  document.getElementById('new-worker-name').value = '';
+  document.getElementById('new-worker-code').value = '';
+  // Sync in background
+  saveSingleWorker(newWorker);
+}
 
-  // Check for admin
-  if (code === '0000') {
-    state.currentUser = { id: 0, name: 'Admin', code: '0000', role: 'admin' };
-    saveLoginData(state.currentUser);
-    statusEl.textContent = 'Access granted! Welcome Admin';
-    statusEl.style.color = 'var(--success)';
-    setTimeout(() => showAdminDashboard(), 500);
-    
-    // Sync workers in background
-    (async () => {
-      try {
-        const result = await callSheets('listWorkers');
-        if (result && result.ok && result.data) {
-          state.workers = result.data;
-          cache.set('evernote_workers', state.workers);
-        }
-      } catch (e) { console.error(e); }
-    })();
+async function editWorker(id) {
+  const worker = state.workers.find(w => w.id === id);
+  if (!worker) return;
+  document.getElementById('edit-worker-name').value = worker.name;
+  document.getElementById('edit-worker-code').value = worker.code;
+  state.editingWorkerId = id;
+  document.getElementById('edit-worker-modal').classList.remove('hidden');
+}
+
+async function saveWorkerChanges() {
+  if (!state.editingWorkerId) return;
+  const name = document.getElementById('edit-worker-name').value.trim();
+  const code = document.getElementById('edit-worker-code').value.trim();
+  if (!name || !code) {
+    alert('Please fill worker name and code!');
     return;
   }
-
-  // FIRST CHECK LOCAL CACHE FOR INSTANT LOGIN!
-  console.log('� Checking local workers for code:', code);
-  const localWorker = state.workers.find(w => String(w.code) === String(code));
-  
-  if (localWorker) {
-    state.currentUser = { ...localWorker, role: 'worker' };
-    saveLoginData(state.currentUser);
-    statusEl.textContent = `Access granted! Welcome ${localWorker.name}`;
-    statusEl.style.color = 'var(--success)';
-    setTimeout(() => showWorkerDashboard(), 500);
-    
-    // Sync workers in background
-    (async () => {
-      try {
-        const result = await callSheets('listWorkers');
-        if (result && result.ok && result.data) {
-          state.workers = result.data;
-          cache.set('evernote_workers', state.workers);
-        }
-      } catch (e) { console.error(e); }
-    })();
-    return;
-  }
-
-  // If no local match, check Google Sheets
-  statusEl.textContent = 'Checking code...';
-  const result = await callSheets('listWorkers');
-  if (result && result.ok && result.data) {
-    state.workers = result.data;
+  const idx = state.workers.findIndex(w => w.id === state.editingWorkerId);
+  if (idx !== -1) {
+    state.workers[idx] = { ...state.workers[idx], name, code };
     cache.set('evernote_workers', state.workers);
-    
-    const sheetWorker = state.workers.find(w => String(w.code) === String(code));
-    if (sheetWorker) {
-      state.currentUser = { ...sheetWorker, role: 'worker' };
-      saveLoginData(state.currentUser);
-      statusEl.textContent = `Access granted! Welcome ${sheetWorker.name}`;
-      statusEl.style.color = 'var(--success)';
-      setTimeout(() => showWorkerDashboard(), 500);
-      return;
-    }
+    renderWorkerList();
+    // Sync in background
+    saveSingleWorker(state.workers[idx]);
   }
-
-  // Invalid code
-  statusEl.textContent = 'Invalid access code';
-  statusEl.style.color = 'var(--danger)';
+  document.getElementById('edit-worker-modal').classList.add('hidden');
+  state.editingWorkerId = null;
 }
 
-// Clear saved login data
-function clearLoginData() {
-  localStorage.removeItem('evernote_login');
+function closeEditWorkerModal() {
+  document.getElementById('edit-worker-modal').classList.add('hidden');
+  state.editingWorkerId = null;
 }
 
-// Logout
-function logout() {
-  state.currentUser = null;
+function viewWorkerNotes(id, name) {
+  state.selectedWorkerForView = { id, name };
+  document.getElementById('selected-worker-name').textContent = name;
+  document.getElementById('admin-worker-section').querySelector('.list-section').classList.add('hidden');
+  document.getElementById('admin-worker-notes').classList.remove('hidden');
+  renderAdminWorkerNotes(name);
+}
+
+function backToWorkerList() {
   state.selectedWorkerForView = null;
-  clearLoginData();
-  
-  // Reset titles
-  const allTitleElements = document.querySelectorAll('.app-title');
-  allTitleElements.forEach(el => {
-    if (el.closest('#access-screen') || el.closest('#worker-dashboard')) {
-      el.textContent = 'EverNote';
-    } else if (el.closest('#admin-dashboard')) {
-      el.textContent = 'Admin Dashboard';
-    }
-  });
-  
-  showAccessScreen();
+  document.getElementById('admin-worker-notes').classList.add('hidden');
+  document.getElementById('admin-worker-section').querySelector('.list-section').classList.remove('hidden');
 }
 
-// --- Worker functions ---
+function renderAdminWorkerNotes(agentName) {
+  const allNotes = cache.get('notes_list') || [];
+  const workerNotes = allNotes.filter(n => n.Agent === agentName);
+  const todayStrVal = todayStr();
+  const todayNotes = workerNotes.filter(n => fmtDate(n.Date) === todayStrVal);
+  const olderNotes = workerNotes.filter(n => fmtDate(n.Date) !== todayStrVal);
+  const container = document.getElementById('admin-worker-today-view');
+  if (!container) return;
+
+  let html = `
+    <div class="list-header" style="margin-bottom: 12px;">
+      <div class="list-title">Today's Notes</div>
+      <div class="header-right-group">
+        <span class="count">${todayNotes.length}</span>
+      </div>
+    </div>
+    ${todayNotes.length ? `<div class="cards-container">${todayNotes.map(n => renderAdminNoteCard(n, true)).join('')}</div>` : '<div class="empty">No notes today</div>'}
+    <div class="list-header" style="margin-bottom: 12px; margin-top: 24px;">
+      <div class="list-title">All Notes</div>
+      <span class="count">${olderNotes.length}</span>
+    </div>
+    ${olderNotes.length ? `<div class="cards-container">${olderNotes.map(n => renderAdminNoteCard(n, false)).join('')}</div>` : '<div class="empty">No other notes</div>'}`;
+  container.innerHTML = html;
+}
+
+// ------------------------------
+// WORKER FILTER / NOTES
+// ------------------------------
+
+function renderWorkerFilterList() {
+  const container = document.getElementById('worker-filter-list');
+  if (!container) return;
+  const allNotes = cache.get('notes_list') || [];
+  const workerItemsHtml = state.workers.map(worker => {
+    const workerNoteCount = allNotes.filter(note => note.Agent === worker.name).length;
+    const workerIdStr = String(worker.id);
+    const isSelected = state.selectedWorkersForFilter.has(workerIdStr);
+    return `
+      <div class="worker-filter-item ${isSelected ? 'selected' : ''}" onclick="toggleWorkerFilter('${workerIdStr}')">
+        <div class="worker-filter-info">
+          <div class="worker-filter-name">${worker.name}</div>
+          <div class="worker-filter-count">${workerNoteCount} notes</div>
+        </div>
+        <div style="display: flex; align-items: center;">
+          <label class="custom-checkbox" style="width: 24px; height: 24px;">
+            <input type="checkbox" ${isSelected ? 'checked' : ''} onclick="event.stopPropagation(); toggleWorkerFilter('${workerIdStr}');">
+            <span class="checkmark"></span>
+          </label>
+        </div>
+      </div>`;
+  }).join('');
+  container.innerHTML = workerItemsHtml;
+}
+
+function toggleWorkerFilter(workerId) {
+  // Convert workerId to string to ensure consistent type
+  const workerIdStr = String(workerId);
+  if (state.selectedWorkersForFilter.has(workerIdStr)) {
+    state.selectedWorkersForFilter.delete(workerIdStr);
+  } else {
+    state.selectedWorkersForFilter.add(workerIdStr);
+  }
+  renderWorkerFilterList();
+  renderFilteredNotes();
+}
+
+function renderFilteredNotes() {
+  const container = document.getElementById('filtered-notes-container');
+  if (!container) return;
+  const allNotes = cache.get('notes_list') || [];
+  const selectedWorkerNames = state.workers.filter(w => state.selectedWorkersForFilter.has(String(w.id))).map(w => w.name);
+  if (selectedWorkerNames.length === 0) {
+    container.innerHTML = '<div class="empty">Please select workers to view their notes</div>';
+    return;
+  }
+  const filteredNotes = allNotes.filter(n => selectedWorkerNames.includes(n.Agent));
+  filteredNotes.sort((a, b) => new Date(b.Date) - new Date(a.Date));
+  const headerHtml = `
+    <div class="list-header">
+      <div class="list-title">Filtered Notes</div>
+      <div class="header-right-group">
+        <span class="count">${filteredNotes.length}</span>
+        <button class="icon-btn" onclick="exportFilteredNotes()" title="Data Export">
+          <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"></path><polyline points="7 10 12 15 17 10"></polyline><line x1="12" y1="15" x2="12" y2="3"></line></svg>
+        </button>
+        <button class="delete-all-btn" onclick="deleteSelectedAdmin()" title="Delete Selected">
+          <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="3 6 5 6 21 6"></polyline><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"></path><line x1="10" y1="11" x2="10" y2="17"></line><line x1="14" y1="11" x2="14" y2="17"></line></svg>
+        </button>
+      </div>
+    </div>`;
+  if (!filteredNotes.length) {
+    container.innerHTML = headerHtml + '<div class="empty">No notes found for selected workers</div>';
+    return;
+  }
+  container.innerHTML = headerHtml + `
+    <div class="cards-container">
+      ${filteredNotes.map(note => renderAdminNoteCard(note, false)).join('')}
+    </div>`;
+}
+
+// ------------------------------
+// WORKER FUNCTIONS
+// ------------------------------
+
+async function saveNoteWrapper() {
+  console.log("saveNoteWrapper called!");
+  const phoneInput = document.getElementById('phone').value.trim();
+  const noteInput = document.getElementById('note').value.trim();
+  const dateInput = document.getElementById('note-date').value;
+
+  console.log("Inputs: phone:", phoneInput, "note:", noteInput, "date:", dateInput);
+
+  let phone = phoneInput.replace(/[^\d+]/g, '');
+  if (phone.startsWith('+88')) phone = phone.substring(3);
+  else if (phone.startsWith('88')) phone = phone.substring(2);
+  phone = phone.replace(/\D/g, '');
+
+  console.log("Processed phone:", phone);
+
+  if (!phone || !noteInput) {
+    alert('Please fill Number and Note fields!');
+    return;
+  }
+  const finalDate = dateInput || fmtDate(new Date());
+  console.log("Final date:", finalDate);
+  console.log("Calling saveNote with data:", { Agent: state.currentUser?.name, Number: phone, Date: finalDate, Note: noteInput });
+  await saveNote({ Agent: state.currentUser?.name, Number: phone, Date: finalDate, Note: noteInput });
+}
 
 async function saveNote(data) {
-  if (state.currentUser?.role !== 'worker') return;
-
-  // Add agent name to data
+  console.log("saveNote called with data:", data);
+  console.log("state.currentUser:", state.currentUser);
+  if (state.currentUser?.role !== 'worker') {
+    console.log("Not a worker, returning!");
+    return;
+  }
   data.Agent = state.currentUser.name;
-
   const status = document.getElementById("status");
+  const saveBtn = document.getElementById("save");
   try {
-    status.textContent = "Saving...";
-    status.style.color = "#3b82f6";
-
     let currentNotes = cache.get('notes_list') || [];
+    console.log("Current notes from cache:", currentNotes);
     let isNew = false;
-    
-    // Find if we're editing an existing note
     let existingNote = null;
     if (state.editingId !== null) {
-      existingNote = currentNotes.find(n => n.sheetIndex === state.editingId);
+      existingNote = currentNotes.find(n => (n.id === state.editingId || n.sheetIndex === state.editingId));
+      console.log("Existing note found:", existingNote);
     }
-    
+
+    // Optimistic UI
     if (existingNote) {
-      // Update existing note
-      const idx = currentNotes.findIndex(n => n.sheetIndex === state.editingId);
+      const idx = currentNotes.findIndex(n => (n.id === state.editingId || n.sheetIndex === state.editingId));
       if (idx !== -1) {
-        // Keep the rowNum from existing note
-        data.rowNum = existingNote.rowNum;
+        data.id = existingNote.id;
         data.sheetIndex = existingNote.sheetIndex;
-        currentNotes[idx] = data;
+        currentNotes[idx] = { ...existingNote, ...data };
       }
     } else {
-      // Add new note
       isNew = true;
-      data.sheetIndex = Date.now(); // Temp ID
+      data.id = Date.now().toString();
+      data.sheetIndex = data.id;
       currentNotes.unshift(data);
     }
-    
+
     cache.set('notes_list', currentNotes);
-    await refresh(true);
+    renderWorkerTodayNotes();
+    renderWorkerAllNotes();
 
-    if (isNew) {
-      setTimeout(() => {
-        const firstCard = document.querySelector('.cards-container .note-card:first-child');
-        if (firstCard) {
-          firstCard.classList.add('animate-new-note');
-        }
-      }, 50);
+    status.textContent = "Syncing...";
+    status.style.color = "#3b82f6";
+
+    // Sync to Firestore
+    await saveNoteToFirestore(data);
+    
+    // Send notification if it's a new Today's Note
+    if (isNew && fmtDate(data.Date) === todayStr()) {
+      sendNotification(`New Note from ${data.Agent}`, data.Note);
     }
-
-    // Prepare payload for Google Sheets - use rowNum if available
-    const savePayload = {
-      Agent: data.Agent,
-      Number: data.Number,
-      Date: data.Date,
-      Note: data.Note
-    };
-    if (existingNote && existingNote.rowNum) {
-      savePayload.rowNum = existingNote.rowNum;
-    }
-
-    // Sync with Google Sheets
-    const result = await callSheets('save', savePayload);
-    if (result.ok) {
-      status.textContent = "Synced with Google Sheets!";
-      status.style.color = "green";
-      setTimeout(() => { if(status.textContent.includes("Synced")) status.textContent = ""; }, 3000);
-      await refresh(false);
-    } else {
-      status.textContent = "Sync failed, but saved on phone.";
-      status.style.color = "orange";
-    }
-
-    return { ok: true };
-  } catch(e) {
-    status.textContent = "Error: " + e.message;
-    status.style.color = "red";
-    return { ok: false, error: e.message };
+    
+    status.textContent = "Saved!";
+    status.style.color = "green";
+    renderWorkerTodayNotes();
+    renderWorkerAllNotes();
+    setTimeout(() => { if (status.textContent.includes("Saved")) status.textContent = ""; }, 3000);
+  } catch (e) {
+    status.textContent = "Saved locally, sync failed!";
+    status.style.color = "orange";
   }
+
+  document.getElementById("phone").value = "";
+  document.getElementById("note").value = "";
+  document.getElementById("note-date").value = "";
+  state.editingId = null;
+  saveBtn.textContent = "Save Note";
+  saveBtn.classList.remove("editing");
+}
+
+function renderWorkerTodayNotes() {
+  if (!state.currentUser) return;
+  const agentName = state.currentUser.name;
+  const allNotes = cache.get('notes_list') || [];
+  const todayNotes = allNotes.filter(n => {
+    if (!n.Date) return false;
+    if (n.Agent !== agentName) return false;
+    return fmtDate(n.Date) === todayStr();
+  });
+  renderList(todayNotes, "today-view");
+  renderPhones(allNotes.filter(n => n.Agent === agentName));
+}
+
+function renderWorkerAllNotes() {
+  if (!state.currentUser) return;
+  const agentName = state.currentUser.name;
+  const allNotes = cache.get('notes_list') || [];
+  const workerNotes = allNotes.filter(n => n.Agent === agentName);
+  renderList(workerNotes, "all-view");
+  renderPhones(workerNotes);
 }
 
 async function deleteSelected() {
@@ -1004,196 +1236,91 @@ async function deleteSelected() {
     alert("Please select at least one note to delete.");
     return;
   }
-
   if (!confirm(`Are you sure you want to delete ${state.selectedIds.size} selected note(s)?`)) return;
 
-  const status = document.getElementById("status");
-
-  // 1. FIRST DELETE FROM LOCAL CACHE INSTANTLY!
+  const statusEl = document.getElementById("status");
   const deleteKeys = new Set(state.selectedIds);
   const currentNotes = cache.get('notes_list') || [];
   const filteredNotes = currentNotes.filter(n => !deleteKeys.has(getNoteKey(n)));
   cache.set('notes_list', filteredNotes);
-  
-  // Update UI manually (like deleteSelectedAdmin does!)
   state.selectedIds.clear();
-  
-  const agentName = state.currentUser.name;
-  // Filter filteredNotes to just agentName's notes
-  const workerNotes = filteredNotes.filter(n => n.Agent === agentName);
-  const todayStrVal = todayStr();
-  const todayNotes = workerNotes.filter(n => n.Date && fmtDate(n.Date) === todayStrVal);
-  
-  state.todayItems = todayNotes;
-  state.allItems = workerNotes;
-  
-  renderList(state.todayItems, "today-view");
-  renderList(state.allItems, "all-view");
-  renderPhones(workerNotes);
-  
-  status.textContent = "Deleting...";
-  status.style.color = "blue";
+  renderWorkerTodayNotes();
+  renderWorkerAllNotes();
+  statusEl.textContent = "Deleting...";
+  statusEl.style.color = "blue";
 
-  // 2. NOW SYNC WITH GOOGLE SHEETS IN BACKGROUND!
+  // Sync in background
   (async () => {
     try {
-      const response = await fetch(SCRIPT_URL + '?action=list', { cache: 'no-cache' });
-      const rawData = await response.json();
-      
-      const allNotes = [];
-      for (let i = 1; i < rawData.length; i++) {
-        allNotes.push({
-          rowNum: i + 1,
-          sheetIndex: i,
-          Agent: rawData[i][0] || "",
-          Number: rawData[i][1] || "",
-          Date: rawData[i][2] || "",
-          Note: rawData[i][3] || ""
-        });
-      }
-
-      const selectedNotes = allNotes.filter(n => deleteKeys.has(getNoteKey(n)));
-      let successCount = 0;
-      for (let i = 0; i < selectedNotes.length; i++) {
-        const targetNote = selectedNotes[i];
-        const currentRes = await fetch(SCRIPT_URL + '?action=list', { cache: 'no-cache' });
-        const currentRawData = await currentRes.json();
-        let currentRowNum = null;
-        for (let j = 1; j < currentRawData.length; j++) {
-          if (
-            currentRawData[j][0] === targetNote.Agent &&
-            currentRawData[j][1] === targetNote.Number &&
-            currentRawData[j][2] === targetNote.Date &&
-            currentRawData[j][3] === targetNote.Note
-          ) {
-            currentRowNum = j + 1;
-            break;
-          }
-        }
-        if (currentRowNum) {
-          const deleteRes = await fetch(`${SCRIPT_URL}?action=delete&rowNum=${currentRowNum}`, { cache: 'no-cache' });
-          const deleteResult = await deleteRes.text();
-          if (deleteResult.includes('OK')) successCount++;
-        }
-      }
-
-      const finalRes = await fetch(SCRIPT_URL + '?action=list', { cache: 'no-cache' });
-      const finalRawData = await finalRes.json();
-      const finalNotes = [];
-      for (let i = 1; i < finalRawData.length; i++) {
-        finalNotes.push({
-          rowNum: i + 1,
-          sheetIndex: i,
-          Agent: finalRawData[i][0] || "",
-          Number: finalRawData[i][1] || "",
-          Date: finalRawData[i][2] || "",
-          Note: finalRawData[i][3] || ""
-        });
-      }
-      cache.set('notes_list', finalNotes);
-      await refresh(false);
-      if (successCount === selectedNotes.length) {
-        status.textContent = "Successfully deleted!";
-        status.style.color = "green";
-        setTimeout(() => { if(status.textContent.includes("Successfully")) status.textContent = ""; }, 3000);
-      }
+      const freshNotes = await getAllNotes(false);
+      const selectedNotes = freshNotes.filter(n => deleteKeys.has(getNoteKey(n)));
+      const noteIdsToDelete = selectedNotes.map(n => n.id).filter(id => id);
+      if (noteIdsToDelete.length > 0) await deleteNotesFromFirestore(noteIdsToDelete);
+      renderWorkerTodayNotes();
+      renderWorkerAllNotes();
+      statusEl.textContent = "Deleted!";
+      statusEl.style.color = "green";
     } catch (e) {
-      console.error("Background delete failed:", e);
-      status.textContent = "Deleted locally, sync failed!";
-      status.style.color = "orange";
-      setTimeout(() => status.textContent = "", 3000);
+      statusEl.textContent = "Deleted locally, sync failed!";
+      statusEl.style.color = "orange";
     }
+    setTimeout(() => statusEl.textContent = "", 3000);
   })();
 }
 
 function toggleSelect(noteKey) {
-  console.log("toggleSelect called with noteKey:", noteKey);
-  if (state.selectedIds.has(noteKey)) {
-    state.selectedIds.delete(noteKey);
-    console.log("Removed from worker selection, now:", Array.from(state.selectedIds));
-  } else {
-    state.selectedIds.add(noteKey);
-    console.log("Added to worker selection, now:", Array.from(state.selectedIds));
-  }
-
-  if (state.activeTab === 'today') {
-    renderList(state.todayItems, "today-view");
-  } else {
-    renderList(state.allItems, "all-view");
-  }
+  if (state.selectedIds.has(noteKey)) state.selectedIds.delete(noteKey);
+  else state.selectedIds.add(noteKey);
+  if (state.activeTab === 'today') renderWorkerTodayNotes();
+  else renderWorkerAllNotes();
 }
 
-// Delete a single worker note
 async function deleteSingleWorkerNote(noteKey) {
   state.selectedIds.clear();
   state.selectedIds.add(noteKey);
   await deleteSelected();
 }
 
-async function editNote(sheetIndex) {
-  const res = await listRemote(true);
-  const allNotes = res.items || [];
-  const note = allNotes.find(i => i.sheetIndex === sheetIndex);
+async function editNote(id) {
+  const allNotes = cache.get('notes_list') || await getAllNotes(true);
+  const note = allNotes.find(i => (i.id === id || i.sheetIndex === id));
   if (!note) return;
-
-  if (note.Date) {
-    document.getElementById("note-date").value = fmtDate(note.Date);
-  }
-
+  if (note.Date) document.getElementById("note-date").value = fmtDate(note.Date);
   document.getElementById("phone").value = note.Number;
   document.getElementById("note").value = note.Note;
-
   const warningDiv = document.getElementById("duplicate-warning");
   if (warningDiv) warningDiv.classList.add("hidden");
-
-  state.editingId = sheetIndex;
+  state.editingId = id;
   const saveBtn = document.getElementById("save");
   saveBtn.textContent = "Update Note";
   saveBtn.classList.add("editing");
-
   window.scrollTo({ top: 0, behavior: 'smooth' });
 }
 
-async function listNotes(type, useCache = true, agentName = null) {
-  let items = [];
-  try {
-    const res = await listRemote(useCache);
-    items = res.items || [];
-  } catch(e) {
-    console.error("List fetch error:", e);
-    items = [];
-  }
-
-  // Filter by agent if specified
-  if (agentName) {
-    items = items.filter(i => i.Agent === agentName);
-  }
-
-  const combined = [...items];
-  combined.sort((a, b) => new Date(a.Date) - new Date(b.Date));
-
-  if(type === 'today') {
-    const t = todayStr();
-    return combined.filter(i => {
-      if (!i.Date) return false;
-      return fmtDate(i.Date) === t;
-    });
-  }
-  return combined;
+function setTab(tab) {
+  state.activeTab = tab;
+  document.getElementById('tab-today').classList.toggle('active', tab === 'today');
+  document.getElementById('tab-all').classList.toggle('active', tab === 'all');
+  document.getElementById('today-view').classList.toggle('hidden', tab !== 'today');
+  document.getElementById('all-view').classList.toggle('hidden', tab !== 'all');
 }
 
-function renderPhones(items) { const dl = document.getElementById("phone-suggestions"); dl.innerHTML = ""; uniquePhones(items).slice(0, 50).forEach(p => { const o = document.createElement("option"); o.value = p; dl.appendChild(o); }); }
+function renderPhones(items) {
+  const dl = document.getElementById("phone-suggestions");
+  if (!dl) return;
+  dl.innerHTML = "";
+  uniquePhones(items).slice(0, 50).forEach(p => {
+    const o = document.createElement("option");
+    o.value = p;
+    dl.appendChild(o);
+  });
+}
 
 function renderList(items, container) {
   const el = document.getElementById(container);
   if (!el) return;
-
-  if (container === "today-view") {
-    state.todayItems = items;
-  } else {
-    state.allItems = items;
-  }
-
+  if (container === "today-view") state.todayItems = items;
+  else state.allItems = items;
   const searchQuery = state.searchQuery || "";
   let filteredItems = items;
   if (container === "all-view" && searchQuery) {
@@ -1202,75 +1329,43 @@ function renderList(items, container) {
       return num.includes(searchQuery);
     });
   }
-
   const isAllView = container === "all-view";
-  const hasHeader = el.querySelector('.list-header');
-
-  if (!hasHeader || isAllView) {
-    const headerHtml = `
-      <div class="list-header ${isAllView ? 'header-compact' : ''}">
-        ${container === "today-view" ? `<div class="list-title">Today's Notes</div>` : ""}
-        <div class="header-main-actions">
-          ${isAllView ? `
-          <div class="search-wrapper-dynamic ${state.searchVisible ? 'visible' : ''}">
-            <button class="search-toggle-btn" onclick="toggleSearchBar()" title="Search">
-              <svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="11" cy="11" r="8"></circle><line x1="21" y1="21" x2="16.65" y2="16.65"></line></svg>
-            </button>
-            <div class="search-input-container">
-              <input type="text" id="search-input" placeholder="Search number..." value="${searchQuery}">
-            </div>
-          </div>` : ""}
-          <div class="header-right-group">
-            <span class="count">${filteredItems.length}</span>
-            ${container === "all-view" ? `
-            <button class="delete-all-btn" onclick="deleteSelected()" title="Delete Selected">
-              <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="3 6 5 6 21 6"></polyline><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"></path><line x1="10" y1="11" x2="10" y2="17"></line><line x1="14" y1="11" x2="14" y2="17"></line></svg>
-            </button>` : ""}
+  const headerHtml = `
+    <div class="list-header ${isAllView ? 'header-compact' : ''}">
+      ${container === "today-view" ? `<div class="list-title">Today's Notes</div>` : ""}
+      <div class="header-main-actions">
+        ${isAllView ? `
+        <div class="search-wrapper-dynamic ${state.searchVisible ? 'visible' : ''}">
+          <button class="search-toggle-btn" onclick="toggleSearchBar()" title="Search">
+            <svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="11" cy="11" r="8"></circle><line x1="21" y1="21" x2="16.65" y2="16.65"></line></svg>
+          </button>
+          <div class="search-input-container">
+            <input type="text" id="search-input" placeholder="Search number..." value="${searchQuery}">
           </div>
+        </div>` : ""}
+        <div class="header-right-group">
+          <span class="count">${filteredItems.length}</span>
+          ${container === "all-view" ? `
+          <button class="icon-btn" onclick="exportWorkerAllNotes()" title="Data Export">
+            <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"></path><polyline points="7 10 12 15 17 10"></polyline><line x1="12" y1="15" x2="12" y2="3"></line></svg>
+          </button>
+          <button class="delete-all-btn" onclick="deleteSelected()" title="Delete Selected">
+            <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="3 6 5 6 21 6"></polyline><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"></path><line x1="10" y1="11" x2="10" y2="17"></line><line x1="14" y1="11" x2="14" y2="17"></line></svg>
+          </button>` : ""}
         </div>
-      </div>`;
-
-    const cardsHtml = filteredItems.length ? `
-      <div class="cards-container">
-        ${filteredItems.map(i => renderNoteCard(i, container)).join("")}
-      </div>` : `<div class="empty">${isAllView ? "No Notes Found" : "No Notes For Today"}</div>`;
-
-    el.innerHTML = headerHtml + cardsHtml;
-
-    if (isAllView) {
-      attachSearchListener();
-      const input = document.getElementById("search-input");
-      if (input && state.searchVisible) {
-        input.focus();
-        input.setSelectionRange(input.value.length, input.value.length);
-      }
-    }
-  } else {
-    const countEl = el.querySelector('.count');
-    if (countEl) countEl.textContent = filteredItems.length;
-
-    const cardsContainer = el.querySelector('.cards-container');
-    const emptyEl = el.querySelector('.empty');
-
-    if (filteredItems.length) {
-      const cardsHtml = filteredItems.map(i => renderNoteCard(i, container)).join("");
-      if (cardsContainer) {
-        cardsContainer.innerHTML = cardsHtml;
-      } else {
-        if (emptyEl) emptyEl.remove();
-        const newCardsContainer = document.createElement('div');
-        newCardsContainer.className = 'cards-container';
-        newCardsContainer.innerHTML = cardsHtml;
-        el.appendChild(newCardsContainer);
-      }
-    } else {
-      if (cardsContainer) cardsContainer.remove();
-      if (!emptyEl) {
-        const newEmpty = document.createElement('div');
-        newEmpty.className = 'empty';
-        newEmpty.textContent = container === "today-view" ? "No Notes For Today" : "No Notes Found";
-        el.appendChild(newEmpty);
-      }
+      </div>
+    </div>`;
+  const cardsHtml = filteredItems.length ? `
+    <div class="cards-container">
+      ${filteredItems.map(i => renderNoteCard(i, container)).join("")}
+    </div>` : `<div class="empty">${isAllView ? "No Notes Found" : "No Notes For Today"}</div>`;
+  el.innerHTML = headerHtml + cardsHtml;
+  if (isAllView) {
+    attachSearchListener();
+    const input = document.getElementById("search-input");
+    if (input && state.searchVisible) {
+      input.focus();
+      input.setSelectionRange(input.value.length, input.value.length);
     }
   }
 }
@@ -1280,7 +1375,7 @@ function renderNoteCard(i, container = "") {
   const isSelected = state.selectedIds.has(noteKey);
   const isAllView = container === "all-view";
   return `
-    <div class="note-card ${isSelected ? 'selected-row' : ''}" onclick="showFullNote(${i.sheetIndex}, event)">
+    <div class="note-card ${isSelected ? 'selected-row' : ''}" onclick="showFullNote('${i.id || i.sheetIndex}', event)">
       <div class="card-top">
         <div style="display: flex; gap: 12px; align-items: center;">
           ${isAllView ? `
@@ -1304,7 +1399,7 @@ function renderNoteCard(i, container = "") {
           </div>
         </div>
         <div class="card-actions" style="gap: 8px;">
-          <button class="edit-btn-icon" title="Edit Note" onclick="event.stopPropagation(); editNote(${i.sheetIndex})">
+          <button class="edit-btn-icon" title="Edit Note" onclick="event.stopPropagation(); editNote('${i.id || i.sheetIndex}')">
             <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7"></path><path d="M18.5 2.5a2.121 2.121 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z"></path></svg>
           </button>
         </div>
@@ -1313,610 +1408,292 @@ function renderNoteCard(i, container = "") {
     </div>`;
 }
 
-function showFullNote(sheetIndex, event) {
-  if (event.target.closest('.note-checkbox') || event.target.closest('.edit-btn')) return;
-
-  const allNotes = (state.allItems || []).length ? state.allItems : (cache.get('notes_list') || []);
-  const note = allNotes.find(i => i.sheetIndex === sheetIndex);
-  if (!note) return;
-
-  const modal = document.getElementById("note-modal");
-  const modalBody = document.getElementById("modal-body");
-  const modalDate = document.getElementById("modal-date");
-  const modalPhone = document.getElementById("modal-phone");
-
-  modalBody.textContent = note.Note;
-  modalDate.textContent = fmtDisplayDate(note.Date);
-  modalPhone.textContent = note.Number;
-
-  modal.classList.remove("hidden");
-  document.body.style.overflow = "hidden";
-}
-
-function closeModal() {
-  const modal = document.getElementById("note-modal");
-  modal.classList.add("hidden");
-  document.body.style.overflow = "auto";
-}
-
 function toggleSearchBar() {
   state.searchVisible = !state.searchVisible;
-  renderList(state.allItems || [], "all-view");
-  if (state.searchVisible) {
-    setTimeout(() => {
-      const input = document.getElementById("search-input");
-      if (input) input.focus();
-    }, 100);
-  } else {
-    state.searchQuery = "";
-    renderList(state.allItems || [], "all-view");
-  }
+  state.searchQuery = "";
+  renderWorkerAllNotes();
 }
 
 function attachSearchListener() {
   const searchInput = document.getElementById("search-input");
-  if (searchInput && !searchInput.dataset.listenerAttached) {
-    searchInput.dataset.listenerAttached = "true";
+  if (!searchInput) return;
+  searchInput.addEventListener("input", (e) => {
+    state.searchQuery = e.target.value;
+    renderWorkerAllNotes();
+  });
+}
 
-    searchInput.addEventListener("input", (e) => {
-      state.searchQuery = e.target.value.trim();
-      renderList(state.allItems || [], "all-view");
-    });
+function showFullNote(id, event) {
+  if (event) event.stopPropagation();
+  const allNotes = cache.get('notes_list') || [];
+  const note = allNotes.find(i => (i.id === id || i.sheetIndex === id));
+  if (!note) return;
+  const modal = document.getElementById("note-modal");
+  document.getElementById("modal-body").textContent = note.Note || "No content";
+  document.getElementById("modal-date").textContent = `Date: ${fmtDisplayDate(note.Date)}`;
+  document.getElementById("modal-phone").textContent = `Number: ${note.Number || "N/A"}`;
+  modal.classList.remove("hidden");
+}
+
+function closeModal() {
+  document.getElementById("note-modal").classList.add("hidden");
+}
+
+function copyNumber(number, event) {
+  if (event) event.stopPropagation();
+  navigator.clipboard.writeText(number).catch(console.error);
+}
+
+async function pastePhone() {
+  try {
+    const text = await navigator.clipboard.readText();
+    const phoneInput = document.getElementById('phone');
+    if (phoneInput) phoneInput.value = text;
+  } catch (e) {
+    console.error("Failed to read clipboard:", e);
   }
 }
 
-function setTab(name) {
-  state.activeTab = name;
-  document.getElementById("tab-today").classList.toggle("active", name === "today");
-  document.getElementById("tab-all").classList.toggle("active", name === "all");
-  document.getElementById("today-view").classList.toggle("hidden", name !== "today");
-  document.getElementById("all-view").classList.toggle("hidden", name !== "all");
-
-  // Show/hide the worker form only when on Today tab
-  const formSection = document.getElementById("worker-form-section");
-  if (formSection) {
-    formSection.classList.toggle("hidden", name !== "today");
-  }
-
-  refresh(true);
-}
-
-async function refresh(useCache = true) {
-  if (!state.currentUser || state.currentUser.role !== 'worker') return;
-
-  const agentName = state.currentUser.name;
-  if (state.activeTab === 'today') {
-    const today = await listNotes('today', useCache, agentName);
-    renderList(today, "today-view");
-  } else {
-    const all = await listNotes('all', useCache, agentName);
-    state.allItems = all;
-    renderPhones(all);
-    renderList(all, "all-view");
+async function pasteAdminPhone() {
+  try {
+    const text = await navigator.clipboard.readText();
+    const phoneInput = document.getElementById('admin-phone');
+    if (phoneInput) phoneInput.value = text;
+  } catch (e) {
+    console.error("Failed to read clipboard:", e);
   }
 }
 
-function checkDuplicate(input) {
-  const warningDiv = document.getElementById("duplicate-warning");
-  if (!warningDiv) return;
+async function saveQuickNoteWrapper() {
+  console.log("saveQuickNoteWrapper called!");
+  const noteInput = document.getElementById('note').value.trim();
 
-  if (!input || input.length < 5) {
-    warningDiv.classList.add("hidden");
+  if (!noteInput) {
+    alert('Please fill Note field!');
     return;
   }
-
-  const clean = (val) => {
-    let s = String(val).replace(/[^\d+]/g, '');
-    if (s.startsWith('+88')) s = s.substring(3);
-    else if (s.startsWith('88')) s = s.substring(2);
-    s = s.replace(/\D/g, '');
-    if (s.startsWith('0')) s = s.substring(1);
-    return s;
-  };
-
-  const cleanInput = clean(input);
-  const allNotes = state.allItems || [];
-
-  const match = allNotes.find(n => {
-    if (!n.Number) return false;
-    const sheetNum = clean(n.Number);
-    return sheetNum === cleanInput ||
-           (cleanInput.length >= 10 && sheetNum.includes(cleanInput.slice(-10))) ||
-           (sheetNum.length >= 10 && cleanInput.includes(sheetNum.slice(-10)));
-  });
-
-  if (match) {
-    warningDiv.innerHTML = `
-      <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-        <circle cx="12" cy="12" r="10"></circle>
-        <line x1="12" y1="8" x2="12" y2="12"></line>
-        <line x1="12" y1="16" x2="12.01" y2="16"></line>
-      </svg>
-      <span>Similar note exists (${match.Number})</span>
-      <button onclick="showFullNote(${match.sheetIndex}, event)" style="background:none; border:none; color:var(--primary); cursor:pointer; font-size:12px; font-weight:600; padding:0; margin-left:auto; text-decoration:underline;">View Note</button>
-    `;
-    warningDiv.classList.remove("hidden");
-  } else {
-    warningDiv.classList.add("hidden");
-  }
+  const finalDate = fmtDate(new Date());
+  await saveQuickNote({ Agent: state.currentUser?.name, Date: finalDate, Note: noteInput, createdAt: Date.now(), lastRemindedAt: null });
 }
 
-// Copy number to clipboard
-async function copyNumber(number, event) {
-  event.stopPropagation();
-  if (!number) return;
+async function saveQuickNote(data) {
+  console.log("saveQuickNote called with data:", data);
+  if (state.currentUser?.role !== 'worker') {
+    console.log("Not a worker, returning!");
+    return;
+  }
+  data.Agent = state.currentUser.name;
+  const status = document.getElementById("status");
   try {
-    await navigator.clipboard.writeText(number);
-    // Show a temporary checkmark
-    const target = event.target.closest('button');
-    if (target) {
-      const originalHTML = target.innerHTML;
-      target.innerHTML = `<svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="20 6 9 17 4 12"></polyline></svg>`;
-      target.style.color = '#10b981';
-      setTimeout(() => {
-        target.innerHTML = originalHTML;
-        target.style.color = '';
-      }, 1500);
-    }
-  } catch (err) {
-    console.error('Failed to copy: ', err);
+    let currentQuickNotes = cache.get('quick_notes_list') || [];
+    data.id = Date.now().toString();
+    currentQuickNotes.unshift(data);
+    cache.set('quick_notes_list', currentQuickNotes);
+    state.quickNotes = currentQuickNotes;
+    status.textContent = "Syncing...";
+    status.style.color = "#3b82f6";
+    await saveQuickNoteToFirestore(data);
+    status.textContent = "Saved!";
+    status.style.color = "green";
+    setTimeout(() => { if (status.textContent.includes("Saved")) status.textContent = ""; }, 3000);
+  } catch (e) {
+    status.textContent = "Saved locally, sync failed!";
+    status.style.color = "orange";
   }
+  document.getElementById("note").value = "";
+  document.getElementById("note-date").value = "";
+  document.getElementById("phone").value = "";
 }
 
-// --- Admin functions ---
+async function saveAdminQuickNote() {
+  console.log("saveAdminQuickNote called!");
+  const noteInput = document.getElementById('admin-note').value.trim();
+  const statusEl = document.getElementById('admin-status');
 
-function renderWorkerList() {
-  const container = document.getElementById('worker-list');
+  if (!noteInput) {
+    alert('Please fill Note field!');
+    return;
+  }
+  const finalDate = fmtDate(new Date());
+  let currentQuickNotes = cache.get('quick_notes_list') || [];
+  const savePayload = { Agent: "Sabbir", Date: finalDate, Note: noteInput, createdAt: Date.now(), lastRemindedAt: null };
+  savePayload.id = Date.now().toString();
+  currentQuickNotes.unshift(savePayload);
+  cache.set('quick_notes_list', currentQuickNotes);
+  state.quickNotes = currentQuickNotes;
+  renderAdminQuickNotes();
+  statusEl.textContent = "Syncing...";
+  statusEl.style.color = "#3b82f6";
+  try {
+    await saveQuickNoteToFirestore(savePayload);
+    statusEl.textContent = "Saved!";
+    statusEl.style.color = "green";
+    renderAdminQuickNotes();
+  } catch (e) {
+    statusEl.textContent = "Saved locally, sync failed!";
+    statusEl.style.color = "orange";
+  }
+  setTimeout(() => statusEl.textContent = "", 3000);
+  document.getElementById('admin-note').value = "";
+  document.getElementById('admin-note-date').value = "";
+  document.getElementById('admin-phone').value = "";
+}
+
+function renderAdminQuickNotes() {
+  const quickNotes = cache.get('quick_notes_list') || [];
+  const container = document.getElementById('admin-quick-notes-container');
   if (!container) return;
-
   const headerHtml = `
     <div class="list-header">
-      <div class="list-title">Workers</div>
+      <div class="list-title">Quick Notes</div>
       <div class="header-right-group">
-        <span class="count">${state.workers.length}</span>
+        <span class="count">${quickNotes.length}</span>
       </div>
     </div>`;
-
-  if (state.workers.length === 0) {
-    container.innerHTML = headerHtml + `<div class="empty">No workers found</div>`;
+  if (!quickNotes.length) {
+    container.innerHTML = headerHtml + '<div class="empty">No Quick Notes</div>';
     return;
   }
-
-  const workersHtml = `
+  container.innerHTML = headerHtml + `
     <div class="cards-container">
-      ${state.workers.map(worker => {
-        // Get note count for this worker
-        const allNotes = cache.get('notes_list') || [];
-        const workerNotes = allNotes.filter(n => n.Agent === worker.name);
-        const todayNotes = workerNotes.filter(n => fmtDate(n.Date) === todayStr());
-
-        return `
-          <div class="note-card" style="cursor: pointer;" onclick="viewWorkerNotes(${worker.id})">
-            <div class="card-top">
-              <div class="card-info">
-                <span class="card-phone" style="font-size: 18px;">${worker.name}</span>
-                <span class="card-date">Code: ${worker.code}</span>
-              </div>
-              <div class="card-actions" style="gap: 8px;">
-                <button class="edit-btn-icon" title="Edit Worker" onclick="event.stopPropagation(); editWorker(${worker.id})">
-                  <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7"></path><path d="M18.5 2.5a2.121 2.121 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z"></path></svg>
-                </button>
-                <button class="delete-all-btn" title="Delete Worker" onclick="event.stopPropagation(); deleteWorker(${worker.id})" style="padding: 8px;">
-                  <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="3 6 5 6 21 6"></polyline><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"></path><line x1="10" y1="11" x2="10" y2="17"></line><line x1="14" y1="11" x2="14" y2="17"></line></svg>
-                </button>
-              </div>
-            </div>
-            <div class="card-note">${workerNotes.length} total notes • ${todayNotes.length} today</div>
-          </div>
-        `;
-      }).join('')}
+      ${quickNotes.map(note => renderQuickNoteCard(note)).join('')}
     </div>`;
-
-  container.innerHTML = headerHtml + workersHtml;
 }
 
-async function refreshAdminData() {
-  // Just refresh the notes list cache
-  await listRemote(false);
-  renderWorkerList();
-}
-
-function viewWorkerNotes(workerId) {
-  const worker = state.workers.find(w => w.id === workerId);
-  if (!worker) return;
-
-  state.selectedWorkerForView = worker;
-
-  document.getElementById('worker-list').classList.add('hidden');
-  document.getElementById('admin-worker-notes').classList.remove('hidden');
-  document.getElementById('selected-worker-name').textContent = worker.name;
-
-  renderAdminWorkerNotes(worker.name);
-}
-
-async function renderAdminWorkerNotes(agentName) {
-  const allNotes = await listNotes('all', true, agentName);
-  const todayNotes = await listNotes('today', true, agentName);
-
-  // Update stats
-  document.getElementById('selected-worker-stats').textContent = `${allNotes.length} total notes • ${todayNotes.length} today`;
-
-  // Render today's notes
-  const todayContainer = document.getElementById('admin-worker-today-view');
-  todayContainer.innerHTML = `
-    <div class="list-header">
-      <div class="list-title">Today's Notes</div>
-      <div class="header-right-group">
-        <span class="count">${todayNotes.length}</span>
+function renderQuickNoteCard(note) {
+  return `
+    <div class="note-card" onclick="showFullQuickNote('${note.id}', event)">
+      <div class="card-top">
+        <div style="display: flex; gap: 12px; align-items: center;">
+          <div class="card-info" style="width: 100%;">
+            <div style="display: flex; justify-content: space-between; width: 100%; margin-bottom: 4px; gap: 16px;">
+              <span style="font-size: 13px; font-weight: 700; color: var(--primary);">${note.Agent || "Unknown Agent"}</span>
+              <span class="card-date">${fmtDisplayDate(note.Date)}</span>
+            </div>
+          </div>
+        </div>
       </div>
-    </div>
-    ${todayNotes.length ? `
-      <div class="cards-container" style="padding: 16px;">
-        ${todayNotes.map(i => renderAdminNoteCard(i, true)).join('')}
-      </div>
-    ` : `<div class="empty">No notes today</div>`}
-  `;
-
-  // Render all notes
-  const allContainer = document.getElementById('admin-worker-all-view');
-  allContainer.innerHTML = `
-    <div class="list-header">
-      <div class="list-title">All Notes</div>
-      <div class="header-right-group">
-        <span class="count">${allNotes.length}</span>
-        <button class="delete-all-btn" onclick="deleteSelectedAdmin()" title="Delete Selected">
-          <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="3 6 5 6 21 6"></polyline><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"></path><line x1="10" y1="11" x2="10" y2="17"></line><line x1="14" y1="11" x2="14" y2="17"></line></svg>
-        </button>
-      </div>
-    </div>
-    ${allNotes.length ? `
-      <div class="cards-container" style="padding: 16px;">
-        ${allNotes.map(i => renderAdminNoteCard(i, false)).join('')}
-      </div>
-    ` : `<div class="empty">No notes found</div>`}
-  `;
+      <div class="card-note">${note.Note || "No content"}</div>
+    </div>`;
 }
 
-function backToWorkerList() {
-  state.selectedWorkerForView = null;
-  document.getElementById('admin-worker-notes').classList.add('hidden');
-  document.getElementById('worker-list').classList.remove('hidden');
+function showFullQuickNote(id, event) {
+  if (event) event.stopPropagation();
+  const allQuickNotes = cache.get('quick_notes_list') || [];
+  const quickNote = allQuickNotes.find(i => i.id === id);
+  if (!quickNote) return;
+  const modal = document.getElementById("note-modal");
+  document.getElementById("modal-body").textContent = quickNote.Note || "No content";
+  document.getElementById("modal-date").textContent = `Date: ${fmtDisplayDate(quickNote.Date)}`;
+  document.getElementById("modal-phone").textContent = `Agent: ${quickNote.Agent || "N/A"}`;
+  modal.classList.remove("hidden");
 }
 
-async function addWorker() {
-  const nameInput = document.getElementById('new-worker-name');
-  const codeInput = document.getElementById('new-worker-code');
-  const name = nameInput.value.trim();
-  const code = codeInput.value.trim();
-  
-  if (!name || !code) {
-    alert('Please enter both name and code');
-    return;
-  }
-  
-  // Check for duplicate code
-  if (state.workers.some(w => w.code === code)) {
-    alert('This code is already in use');
-    return;
-  }
-  
-  const newWorker = {
-    id: 0, // Let Google Apps Script handle ID
-    name,
-    code
-  };
-  
-  // Save to Google Sheets first
-  await saveSingleWorker(newWorker);
-  
-  // Refresh workers from Google Sheets
-  const result = await callSheets('listWorkers');
-  if (result && result.ok && result.data) {
-    state.workers = result.data;
-    cache.set('evernote_workers', state.workers);
-  }
-  
-  renderWorkerList();
-  
-  // Also update worker filter list if we're on worker-notes section
-  if (state.adminActiveSection === 'worker-notes') {
-    const lastWorker = state.workers[state.workers.length - 1];
-    if (lastWorker) {
-      state.selectedWorkersForFilter.add(lastWorker.id);
-    }
-    renderWorkerFilterList();
-    renderFilteredNotes();
-  }
-  
-  // Clear inputs
-  nameInput.value = '';
-  codeInput.value = '';
-}
-
-async function deleteWorker(workerId) {
-  console.log('deleteWorker called with workerId:', workerId);
-  const worker = state.workers.find(w => w.id === workerId);
-  console.log('Found worker to delete:', worker);
-  if (!worker) return;
-
-  if (!confirm(`Are you sure you want to delete ${worker.name}?`)) return;
-
-  // Delete from Google Sheets first
-  console.log('Calling deleteSingleWorker with id:', workerId);
-  await deleteSingleWorker(workerId);
-
-  // Refresh workers from Google Sheets
-  const result = await callSheets('listWorkers');
-  console.log('listWorkers result:', result);
-  if (result && result.ok && result.data) {
-    state.workers = result.data;
-    cache.set('evernote_workers', state.workers);
-  }
-
-  // Remove from filter selection too
-  state.selectedWorkersForFilter.delete(workerId);
-  
-  renderWorkerList();
-  
-  // Also update worker filter list if we're on worker-notes section
-  if (state.adminActiveSection === 'worker-notes') {
-    renderWorkerFilterList();
-    renderFilteredNotes();
-  }
-}
-
-function editWorker(workerId) {
-  const worker = state.workers.find(w => w.id === workerId);
-  if (!worker) return;
-
-  state.editingWorkerId = workerId;
-  document.getElementById('edit-worker-name').value = worker.name;
-  document.getElementById('edit-worker-code').value = worker.code;
-
-  document.getElementById('edit-worker-modal').classList.remove('hidden');
-  document.body.style.overflow = 'hidden';
-}
-
-async function saveWorkerChanges() {
-  if (!state.editingWorkerId) return;
-
-  const name = document.getElementById('edit-worker-name').value.trim();
-  const code = document.getElementById('edit-worker-code').value.trim();
-
-  if (!name || !code) {
-    alert('Please enter both name and code');
-    return;
-  }
-
-  // Check for duplicate code (excluding current worker)
-  const duplicate = state.workers.find(w => w.code === code && w.id !== state.editingWorkerId);
-  if (duplicate) {
-    alert('This code is already in use');
-    return;
-  }
-
-  // Update worker
-  const workerIndex = state.workers.findIndex(w => w.id === state.editingWorkerId);
-  if (workerIndex !== -1) {
-    // If name changed, we need to update note agent names in notes too!
-    const oldName = state.workers[workerIndex].name;
-    
-    // Save to Google Sheets first
-    await saveSingleWorker({
-      id: state.editingWorkerId,
-      name: name,
-      code: code
-    });
-    
-    // Refresh workers from Google Sheets
-    const result = await callSheets('listWorkers');
-    if (result && result.ok && result.data) {
-      state.workers = result.data;
-      cache.set('evernote_workers', state.workers);
-    }
-    
-    renderWorkerList();
-    
-    // Also update worker filter list if we're on worker-notes section
-    if (state.adminActiveSection === 'worker-notes') {
-      // Update all notes' agent names in cache
-      let allNotes = cache.get('notes_list') || [];
-      allNotes = allNotes.map(note => {
-        if (note.Agent === oldName) {
-          return { ...note, Agent: name };
-        }
-        return note;
-      });
-      cache.set('notes_list', allNotes);
-      
-      renderWorkerFilterList();
-      renderFilteredNotes();
-    }
-  }
-
-  closeEditWorkerModal();
-}
-
-function closeEditWorkerModal() {
-  state.editingWorkerId = null;
-  document.getElementById('edit-worker-modal').classList.add('hidden');
-  document.body.style.overflow = 'auto';
-}
-
-// Check saved login and return user if valid (within 6 hours)
-function checkSavedLogin() {
-  const loginStr = localStorage.getItem('evernote_login');
-  if (!loginStr) return null;
-  
-  try {
-    const loginData = JSON.parse(loginStr);
-    const SIX_HOURS = 6 * 60 * 60 * 1000; // 6 hours in milliseconds
-    
-    if (Date.now() - loginData.timestamp < SIX_HOURS) {
-      return loginData.user;
-    } else {
-      // Expired, clear it
-      clearLoginData();
-      return null;
-    }
-  } catch (e) {
-    // Invalid data, clear it
-    clearLoginData();
-    return null;
-  }
-}
-
-// --- Initialization ---
+// ------------------------------
+// INITIALIZATION
+// ------------------------------
 
 async function init() {
-  // Initialize workers
-  await initWorkers();
-
-  // Access screen event listeners
-  document.getElementById('enter-btn').addEventListener('click', handleAccessCode);
-  document.getElementById('access-code').addEventListener('keypress', (e) => {
-    if (e.key === 'Enter') handleAccessCode();
-  });
-
-  // Logout buttons
-  document.getElementById('logout-btn').addEventListener('click', logout);
-  document.getElementById('admin-logout-btn').addEventListener('click', logout);
-
-  // Worker dashboard listeners
-  const star = document.getElementById("star");
-  if (star) star.style.display = "none";
-
-  const noteDate = document.getElementById("note-date");
-  if (noteDate) noteDate.value = "";
-
-  document.getElementById("tab-today").addEventListener("click", () => setTab("today"));
-  document.getElementById("tab-all").addEventListener("click", () => setTab("all"));
-
-  const closeBtn = document.getElementById("close-modal");
-  if (closeBtn) closeBtn.addEventListener("click", closeModal);
-
-  const modal = document.getElementById("note-modal");
-  if (modal) {
-    modal.addEventListener("click", (e) => {
-      if (e.target === modal) closeModal();
-    });
-  }
-
-  const pasteBtn = document.getElementById("paste-phone");
-  if (pasteBtn) {
-    pasteBtn.addEventListener("click", async () => {
-      try {
-        const text = await navigator.clipboard.readText();
-        if (text) {
-          const phoneInput = document.getElementById("phone");
-          phoneInput.value = text.trim();
-          checkDuplicate(text.trim());
+  console.log("init function STARTED!");
+  try {
+    // Request notification permission
+    await requestNotificationPermission();
+    console.log("requestNotificationPermission() completed!");
+    // Load workers
+    await initWorkers();
+    console.log("initWorkers() completed!");
+    // Load quick notes
+    await getAllQuickNotes();
+    console.log("getAllQuickNotes() completed!");
+    // Start Quick Note reminder check every minute
+    setInterval(checkQuickNoteReminders, 60 * 1000); // Check every 60 seconds
+    console.log("Quick Note reminder interval started!");
+    // Check saved login
+  const savedLogin = localStorage.getItem('evernote_login');
+  if (savedLogin) {
+    try {
+      const { user, timestamp } = JSON.parse(savedLogin);
+      // Check if login is less than 5 hours old
+      if (Date.now() - timestamp < 5 * 60 * 60 * 1000) {
+        state.currentUser = user;
+        if (user.role === 'admin') {
+          showAdminDashboard();
+          return;
+        } else {
+          // Verify worker still exists
+          const workerExists = state.workers.some(w => String(w.code) === String(user.code));
+          if (workerExists) {
+            showWorkerDashboard();
+            return;
+          }
         }
-      } catch (err) {
-        console.error('Failed to read clipboard contents:', err);
-        document.getElementById("phone").focus();
+      }
+    } catch (e) {
+      console.error("Error parsing saved login:", e);
+    }
+  }
+  showAccessScreen();
+
+  // Attach keypad listeners
+  document.querySelectorAll('.keypad-btn[data-digit]').forEach(btn => {
+    btn.addEventListener('click', () => {
+      if (enteredCode.length < 4) {
+        enteredCode += btn.dataset.digit;
+        updateCodeDisplay();
+        checkAndLogin();
       }
     });
-  }
-
-  const phoneInput = document.getElementById("phone");
-  if (phoneInput) {
-    phoneInput.addEventListener("input", (e) => {
-      checkDuplicate(e.target.value.trim());
-    });
-  }
-
-  document.getElementById("save").addEventListener("click", async () => {
-    if (state.currentUser?.role !== 'worker') return;
-
-    const phoneInputVal = document.getElementById("phone").value.trim();
-    const noteVal = document.getElementById("note").value.trim();
-    const noteDateVal = document.getElementById("note-date").value;
-
-    let phone = phoneInputVal.replace(/[^\d+]/g, '');
-    if (phone.startsWith('+88')) {
-      phone = phone.substring(3);
-    } else if (phone.startsWith('88')) {
-      phone = phone.substring(2);
-    }
-    phone = phone.replace(/\D/g, '');
-
-    if(!phone || !noteVal) {
-      alert("Please fill Number and Note fields!");
-      return;
-    }
-
-    document.getElementById("save").disabled = true;
-
-    const finalDate = noteDateVal || fmtDate(new Date());
-
-    const payload = {
-      Date: finalDate,
-      Number: phone,
-      Note: noteVal
-    };
-
-    if (state.editingId === null) {
-      const res = await listRemote(true);
-      const existingNote = res.items.find(n => n.Number === phone && n.Agent === state.currentUser.name);
-      if (existingNote) {
-        payload.sheetIndex = existingNote.sheetIndex;
-      }
-    } else {
-      payload.sheetIndex = state.editingId;
-    }
-
-    const result = await saveNote(payload);
-
-    state.editingId = null;
-    const saveBtn = document.getElementById("save");
-    saveBtn.textContent = "Save Note";
-    saveBtn.classList.remove("editing");
-
-    document.getElementById("save").disabled = false;
-    document.getElementById("note").value = "";
-    document.getElementById("phone").value = "";
-    document.getElementById("note-date").value = "";
-
-    const warningDiv = document.getElementById("duplicate-warning");
-    if (warningDiv) warningDiv.classList.add("hidden");
-
-    setTab("today");
+  });
+  document.querySelector('.keypad-btn[data-action="delete"]')?.addEventListener('click', () => {
+    enteredCode = enteredCode.slice(0, -1);
+    updateCodeDisplay();
+  });
+  document.querySelector('.keypad-btn[data-action="clear"]')?.addEventListener('click', () => {
+    enteredCode = '';
+    updateCodeDisplay();
   });
 
-  // Admin dashboard listeners - Tabs
-  document.getElementById('admin-tab-add-note').addEventListener('click', () => selectAdminMenuItem('add-note'));
-  document.getElementById('admin-tab-all-notes').addEventListener('click', () => selectAdminMenuItem('all-notes'));
-  
-  // Admin dashboard listeners - Note saving
-  document.getElementById('admin-save-btn').addEventListener('click', saveAdminNote);
-  
-  // Admin dashboard listeners - Worker management
-  document.getElementById('add-worker-btn').addEventListener('click', addWorker);
-  document.getElementById('back-to-workers').addEventListener('click', backToWorkerList);
-  document.getElementById('save-worker-btn').addEventListener('click', saveWorkerChanges);
-  document.getElementById('close-edit-worker-modal').addEventListener('click', closeEditWorkerModal);
-
-  const editWorkerModal = document.getElementById('edit-worker-modal');
-  if (editWorkerModal) {
-    editWorkerModal.addEventListener('click', (e) => {
-      if (e.target === editWorkerModal) closeEditWorkerModal();
-    });
-  }
-
-  // Check for saved login
-  const savedUser = checkSavedLogin();
-  if (savedUser) {
-    state.currentUser = savedUser;
-    if (savedUser.role === 'admin') {
-      showAdminDashboard();
-    } else {
-      showWorkerDashboard();
-    }
-  } else {
-    // Start with access screen
-    showAccessScreen();
+  // Attach other listeners
+  console.log("Attaching event listeners!");
+  console.log("document.getElementById('save'):", document.getElementById('save'));
+  console.log("document.getElementById('admin-save-btn'):", document.getElementById('admin-save-btn'));
+  document.getElementById('save')?.addEventListener('click', saveNoteWrapper);
+  document.getElementById('admin-save-btn')?.addEventListener('click', saveAdminNote);
+  document.getElementById('add-worker-btn')?.addEventListener('click', addWorker);
+  document.getElementById('save-worker-btn')?.addEventListener('click', saveWorkerChanges);
+  document.getElementById('close-edit-worker-modal')?.addEventListener('click', closeEditWorkerModal);
+  document.getElementById('paste-phone')?.addEventListener('click', pastePhone);
+  document.getElementById('paste-admin-phone')?.addEventListener('click', pasteAdminPhone);
+  document.getElementById('save-quick-note-worker')?.addEventListener('click', saveQuickNoteWrapper);
+  document.getElementById('save-quick-note-admin')?.addEventListener('click', saveAdminQuickNote);
+  document.getElementById('back-to-workers')?.addEventListener('click', backToWorkerList);
+  document.getElementById('close-modal')?.addEventListener('click', closeModal);
+  document.getElementById('tab-today')?.addEventListener('click', () => setTab('today'));
+  document.getElementById('tab-all')?.addEventListener('click', () => setTab('all'));
+  document.getElementById('admin-tab-add-note')?.addEventListener('click', () => selectAdminMenuItem('add-note'));
+  document.getElementById('admin-tab-all-notes')?.addEventListener('click', () => selectAdminMenuItem('all-notes'));
+  // Worker menu
+  document.getElementById('worker-menu-logout')?.addEventListener('click', () => { logout(); closeWorkerMenu(); });
+  document.getElementById('worker-menu-overlay')?.addEventListener('click', closeWorkerMenu);
+  // Admin menu
+  document.getElementById('admin-menu-logout')?.addEventListener('click', () => { logout(); closeAdminMenu(); });
+  document.getElementById('admin-menu-overlay')?.addEventListener('click', closeAdminMenu);
+  // Close modal on overlay click
+  document.getElementById('note-modal')?.addEventListener('click', (e) => {
+    if (e.target.id === 'note-modal') closeModal();
+  });
+  document.getElementById('edit-worker-modal')?.addEventListener('click', (e) => {
+    if (e.target.id === 'edit-worker-modal') closeEditWorkerModal();
+  });
+  console.log("init function COMPLETED successfully!");
+  } catch (e) {
+    console.error("ERROR in init function!", e);
   }
 }
 
-document.addEventListener("DOMContentLoaded", init);
+// Run init when DOM is ready
+if (document.readyState === 'loading') {
+  document.addEventListener('DOMContentLoaded', init);
+} else {
+  init();
+}
