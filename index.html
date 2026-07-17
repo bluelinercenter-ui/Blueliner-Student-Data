@@ -7,7 +7,7 @@
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap" rel="stylesheet">
-<link rel="stylesheet" href="./styles.css">
+<link rel="stylesheet" href="./styles.css?v=20250717">
 <link rel="manifest" href="./manifest.json">
 <meta name="theme-color" content="#09090b">
 <link rel="apple-touch-icon" href="./logo192.png">
@@ -49,12 +49,12 @@
 <!-- Worker Dashboard -->
 <div id="worker-dashboard" class="app hidden">
   <!-- Menu Overlay -->
-  <div id="worker-menu-overlay" class="menu-overlay hidden" onclick="closeWorkerMenu()"></div>
+  <div id="worker-menu-overlay" class="menu-overlay hidden"></div>
   <!-- Side Menu -->
   <div id="worker-side-menu" class="side-menu hidden">
     <div class="menu-header">
       <h2 style="margin: 0; color: var(--text);">Menu</h2>
-      <button id="worker-close-menu-btn" class="icon-btn" onclick="closeWorkerMenu()">
+      <button id="worker-close-menu-btn" class="icon-btn">
         <svg viewBox="0 0 24 24" width="24" height="24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
           <line x1="18" y1="6" x2="6" y2="18"></line>
           <line x1="6" y1="6" x2="18" y2="18"></line>
@@ -62,7 +62,7 @@
       </button>
     </div>
     <div class="menu-items">
-      <div class="menu-item" id="worker-menu-logout" onclick="logout(); closeWorkerMenu();">
+      <div class="menu-item" id="worker-menu-logout">
         Logout
       </div>
     </div>
@@ -70,7 +70,7 @@
   
   <header class="header">
     <div style="display: flex; justify-content: space-between; align-items: center; width: 100%;">
-      <button id="worker-menu-toggle-btn" class="header-icon-btn icon-btn" title="Menu" onclick="openWorkerMenu()">
+      <button id="worker-menu-toggle-btn" class="header-icon-btn icon-btn" title="Menu">
         <svg viewBox="0 0 24 24" width="24" height="24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
           <line x1="3" y1="12" x2="21" y2="12"></line>
           <line x1="3" y1="6" x2="21" y2="6"></line>
@@ -81,8 +81,9 @@
       <div style="width: 40px;"></div> <!-- Spacer for balance -->
     </div>
     <div class="tabs">
-      <button id="tab-today" class="tab active" onclick="setTab('today')">Today</button>
-      <button id="tab-all" class="tab" onclick="setTab('all')">All</button>
+      <button id="tab-today" class="tab active">Today</button>
+      <button id="tab-all" class="tab">All</button>
+      <button id="tab-quick-notes" class="tab">Quick Notes</button>
     </div>
   </header>
   <main class="main">
@@ -107,25 +108,26 @@
         <textarea id="note" rows="3" placeholder="Note"></textarea>
       </div>
       <div class="form-actions">
-          <button id="save" class="btn-primary" onclick="saveNoteWrapper()">Save Note</button>
-          <button id="save-quick-note-worker" class="btn-secondary" onclick="saveQuickNoteWrapper()">Quick Note</button>
+          <button id="save" class="btn-primary">Save Note</button>
+          <button id="save-quick-note-worker" class="btn-secondary">Quick Note</button>
           <div id="status" style="margin-top: var(--space-sm); text-align: center; font-size: var(--font-size-sm); width: 100%;"></div>
         </div>
     </section>
     <section id="today-view" class="list-section"></section>
     <section id="all-view" class="list-section hidden"></section>
+    <section id="worker-quick-notes-view" class="list-section hidden"></section>
   </main>
 </div>
 
 <!-- Admin Dashboard -->
 <div id="admin-dashboard" class="app hidden">
   <!-- Menu Overlay -->
-  <div id="admin-menu-overlay" class="menu-overlay hidden" onclick="closeAdminMenu()"></div>
+  <div id="admin-menu-overlay" class="menu-overlay hidden"></div>
   <!-- Side Menu -->
   <div id="admin-side-menu" class="side-menu hidden">
     <div class="menu-header">
       <h2 style="margin: 0; color: var(--text);">Menu</h2>
-      <button id="close-menu-btn" class="icon-btn" onclick="closeAdminMenu()">
+      <button id="close-menu-btn" class="icon-btn">
         <svg viewBox="0 0 24 24" width="24" height="24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
           <line x1="18" y1="6" x2="6" y2="18"></line>
           <line x1="6" y1="6" x2="18" y2="18"></line>
@@ -133,22 +135,25 @@
       </button>
     </div>
     <div class="menu-items">
-      <div class="menu-item active" id="menu-item-add-note" onclick="selectAdminMenuItem('add-note')">
+      <div class="menu-item active" id="menu-item-add-note">
         Add Note
       </div>
-      <div class="menu-item" id="menu-item-all-notes" onclick="selectAdminMenuItem('all-notes')">
+      <div class="menu-item" id="menu-item-all-notes">
         All Notes
       </div>
-      <div class="menu-item" id="menu-item-workers" onclick="selectAdminMenuItem('workers')">
+      <div class="menu-item" id="menu-item-workers">
         Workers
       </div>
-      <div class="menu-item" id="menu-item-worker-notes" onclick="selectAdminMenuItem('worker-notes')">
+      <div class="menu-item" id="menu-item-worker-notes">
           Worker's Notes
         </div>
-        <div class="menu-item" id="menu-item-quick-notes" onclick="selectAdminMenuItem('quick-notes')">
-          Quick Notes
+        <div class="menu-item" id="menu-item-quick-notes">
+          My Quick Notes
         </div>
-        <div class="menu-item" id="admin-menu-logout" onclick="logout(); closeAdminMenu();">
+        <div class="menu-item" id="menu-item-all-workers-quick-notes">
+          All Workers' Quick Notes
+        </div>
+        <div class="menu-item" id="admin-menu-logout">
           Logout
         </div>
     </div>
@@ -158,7 +163,7 @@
     <div class="admin-header-row">
       <!-- Left Column - Menu Button -->
       <div class="admin-header-left">
-        <button id="menu-toggle-btn" class="header-icon-btn icon-btn" title="Menu" onclick="openAdminMenu()">
+        <button id="menu-toggle-btn" class="header-icon-btn icon-btn" title="Menu">
           <svg viewBox="0 0 24 24" width="24" height="24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
             <line x1="3" y1="12" x2="21" y2="12"></line>
             <line x1="3" y1="6" x2="21" y2="6"></line>
@@ -173,9 +178,9 @@
       <div class="admin-header-right" style="width: 40px;"></div> <!-- Spacer for balance -->
     </div>
     <div class="tabs admin-tabs hidden" id="admin-tabs-container">
-      <button id="admin-tab-add-note" class="tab" onclick="selectAdminMenuItem('add-note')">Add Note</button>
-      <button id="admin-tab-all-notes" class="tab" onclick="selectAdminMenuItem('all-notes')">All Notes</button>
-      <button id="admin-tab-quick-notes" class="tab" onclick="selectAdminMenuItem('quick-notes')">Quick Note</button>
+      <button id="admin-tab-add-note" class="tab">Add Note</button>
+      <button id="admin-tab-all-notes" class="tab">All Notes</button>
+      <button id="admin-tab-quick-notes" class="tab">Quick Note</button>
     </div>
   </header>
   <main class="main">
@@ -199,7 +204,7 @@
       <section id="admin-worker-notes" class="list-section hidden">
         <div class="list-header">
           <div style="display: flex; gap: 12px; align-items: center;">
-            <button id="back-to-workers" class="icon-btn" title="Back" onclick="backToWorkerList()">
+            <button id="back-to-workers" class="icon-btn" title="Back">
               <svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
                 <polyline points="15 18 9 12 15 6"></polyline>
               </svg>
@@ -240,7 +245,7 @@
         <div class="form-row">
           <div class="input-with-icon" style="position: relative;">
             <input id="admin-phone" type="tel" placeholder="Number" inputmode="numeric" pattern="[0-9]{11}" style="padding-right: 40px;">
-            <button id="paste-admin-phone" type="button" class="icon-btn" title="Paste number" onclick="pasteAdminPhone()" style="position: absolute; right: 8px; top: 50%; transform: translateY(-50%);">
+            <button id="paste-admin-phone" type="button" class="icon-btn" title="Paste number" style="position: absolute; right: 8px; top: 50%; transform: translateY(-50%);">
               <svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
                 <rect x="9" y="9" width="13" height="13" rx="2" ry="2"></rect>
                 <path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"></path>
@@ -252,8 +257,8 @@
           <textarea id="admin-note" rows="3" placeholder="Note"></textarea>
         </div>
         <div class="form-actions">
-          <button id="admin-save-btn" class="btn-primary" onclick="saveAdminNote()">Save Note</button>
-          <button id="save-quick-note-admin" class="btn-secondary" onclick="saveAdminQuickNote()">Quick Note</button>
+          <button id="admin-save-btn" class="btn-primary">Save Note</button>
+          <button id="save-quick-note-admin" class="btn-secondary">Quick Note</button>
           <div id="admin-status" style="margin-top: var(--space-sm); text-align: center; font-size: var(--font-size-sm); width: 100%;"></div>
         </div>
       </div>
@@ -271,6 +276,11 @@
     <!-- Quick Notes Section -->
     <section id="admin-quick-notes-section" class="list-section hidden">
       <div id="admin-quick-notes-container"></div>
+    </section>
+
+    <!-- All Workers' Quick Notes Section -->
+    <section id="admin-all-workers-quick-notes-section" class="list-section hidden">
+      <div id="admin-all-workers-quick-notes-container"></div>
     </section>
   </main>
 </div>
@@ -322,6 +332,20 @@
 <!-- jsPDF AutoTable for tables in PDF -->
 <script src="https://cdnjs.cloudflare.com/ajax/libs/jspdf-autotable/3.5.31/jspdf.plugin.autotable.min.js"></script>
 
+<!-- Service Worker Registration -->
+<script>
+  if ('serviceWorker' in navigator) {
+    window.addEventListener('load', () => {
+      navigator.serviceWorker.register('./sw.js')
+        .then(registration => {
+          console.log('Service Worker registered: ', registration);
+        })
+        .catch(error => {
+          console.log('Service Worker registration failed: ', error);
+        });
+    });
+  }
+</script>
 <!-- Your app script -->
 <script src="./app.js"></script>
 </body>

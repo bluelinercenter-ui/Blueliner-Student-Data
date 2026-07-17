@@ -223,6 +223,49 @@ async function deleteNotesFromFirestore(noteIds) {
   }
 }
 
+// Calculate remaining time for quick note
+function getRemainingTime(createdAt) {
+  const now = Date.now();
+  const fiveDaysInMs = 5 * 24 * 60 * 60 * 1000;
+  const expiresAt = createdAt + fiveDaysInMs;
+  const remainingMs = expiresAt - now;
+
+  if (remainingMs <= 0) return { expired: true };
+
+  const remainingDays = Math.floor(remainingMs / (24 * 60 * 60 * 1000));
+  const remainingHours = Math.floor((remainingMs % (24 * 60 * 60 * 1000)) / (60 * 60 * 1000));
+  const remainingMinutes = Math.floor((remainingMs % (60 * 60 * 1000)) / (60 * 1000));
+
+  if (remainingDays > 0) {
+    return {
+      expired: false,
+      text: `${remainingDays} din baki`,
+      isHourCountdown: false
+    };
+  } else {
+    return {
+      expired: false,
+      text: `${remainingHours} ghanta ${remainingMinutes} minute baki`,
+      isHourCountdown: true
+    };
+  }
+}
+
+// Delete expired quick notes
+async function deleteExpiredQuickNotes() {
+  const allQuickNotes = await getAllQuickNotes(false);
+  const now = Date.now();
+  const fiveDaysInMs = 5 * 24 * 60 * 60 * 1000;
+  const expiredNoteIds = allQuickNotes
+    .filter(note => (note.createdAt || 0) + fiveDaysInMs <= now)
+    .map(note => note.id);
+
+  if (expiredNoteIds.length > 0) {
+    console.log(`Deleting ${expiredNoteIds.length} expired quick notes...`);
+    await deleteQuickNotesFromFirestore(expiredNoteIds);
+  }
+}
+
 // Get all Quick Notes from Firestore
 async function getAllQuickNotes(useCache = true) {
   if (useCache) {
@@ -464,6 +507,8 @@ function exportWorkerAllNotes() {
 // ------------------------------
 
 let enteredCode = '';
+let accessCodeListenersAttached = false;
+let appListenersAttached = false;
 
 function updateCodeDisplay() {
   const display = document.getElementById('code-display');
@@ -472,6 +517,23 @@ function updateCodeDisplay() {
   if (enteredCode.length === 0) {
     display.textContent = '••••';
   }
+}
+
+function getWorkersForLogin() {
+  if (Array.isArray(state.workers) && state.workers.length > 0) {
+    return state.workers;
+  }
+
+  const cachedWorkers = cache.get('evernote_workers');
+  if (Array.isArray(cachedWorkers) && cachedWorkers.length > 0) {
+    return cachedWorkers.map(w => ({ ...w, id: String(w.id) }));
+  }
+
+  return DEFAULT_WORKERS.map(w => ({ ...w, id: String(w.id) }));
+}
+
+function hydrateWorkersForLogin() {
+  state.workers = getWorkersForLogin();
 }
 
 async function checkAndLogin() {
@@ -489,7 +551,7 @@ async function checkAndLogin() {
   }
 
   // Check for worker
-  const localWorker = state.workers.find(w => String(w.code) === String(enteredCode));
+  const localWorker = getWorkersForLogin().find(w => String(w.code) === String(enteredCode));
   if (localWorker) {
     state.currentUser = { ...localWorker, role: 'worker' };
     saveLoginData(state.currentUser);
@@ -541,6 +603,99 @@ function showAccessScreen() {
   updateCodeDisplay();
   const accessTitle = document.querySelector('#access-screen .app-title');
   if (accessTitle) accessTitle.textContent = 'EverNote';
+}
+
+function attachAccessCodeListeners() {
+  if (accessCodeListenersAttached) return;
+  accessCodeListenersAttached = true;
+
+  document.querySelectorAll('.keypad-btn[data-digit]').forEach(btn => {
+    btn.addEventListener('click', () => {
+      if (enteredCode.length < 4) {
+        enteredCode += btn.dataset.digit;
+        updateCodeDisplay();
+        checkAndLogin();
+      }
+    });
+  });
+
+  document.querySelector('.keypad-btn[data-action="delete"]')?.addEventListener('click', () => {
+    enteredCode = enteredCode.slice(0, -1);
+    updateCodeDisplay();
+  });
+
+  document.querySelector('.keypad-btn[data-action="clear"]')?.addEventListener('click', () => {
+    enteredCode = '';
+    updateCodeDisplay();
+  });
+
+  document.addEventListener('keydown', (e) => {
+    const accessScreen = document.getElementById('access-screen');
+    if (!accessScreen || accessScreen.classList.contains('hidden')) return;
+
+    if (/^[0-9]$/.test(e.key)) {
+      if (enteredCode.length < 4) {
+        enteredCode += e.key;
+        updateCodeDisplay();
+        checkAndLogin();
+      }
+      return;
+    }
+
+    if (e.key === 'Backspace') {
+      enteredCode = enteredCode.slice(0, -1);
+      updateCodeDisplay();
+    } else if (e.key === 'Escape') {
+      enteredCode = '';
+      updateCodeDisplay();
+    }
+  });
+}
+
+function attachAppEventListeners() {
+  if (appListenersAttached) return;
+  appListenersAttached = true;
+
+  console.log("Attaching event listeners!");
+  console.log("document.getElementById('save'):", document.getElementById('save'));
+  console.log("document.getElementById('admin-save-btn'):", document.getElementById('admin-save-btn'));
+  document.getElementById('save')?.addEventListener('click', saveNoteWrapper);
+  document.getElementById('admin-save-btn')?.addEventListener('click', saveAdminNote);
+  document.getElementById('add-worker-btn')?.addEventListener('click', addWorker);
+  document.getElementById('save-worker-btn')?.addEventListener('click', saveWorkerChanges);
+  document.getElementById('close-edit-worker-modal')?.addEventListener('click', closeEditWorkerModal);
+  document.getElementById('paste-phone')?.addEventListener('click', pastePhone);
+  document.getElementById('paste-admin-phone')?.addEventListener('click', pasteAdminPhone);
+  document.getElementById('save-quick-note-worker')?.addEventListener('click', saveQuickNoteWrapper);
+  document.getElementById('save-quick-note-admin')?.addEventListener('click', saveAdminQuickNote);
+  document.getElementById('back-to-workers')?.addEventListener('click', backToWorkerList);
+  document.getElementById('close-modal')?.addEventListener('click', closeModal);
+  document.getElementById('tab-today')?.addEventListener('click', () => setTab('today'));
+  document.getElementById('tab-all')?.addEventListener('click', () => setTab('all'));
+  document.getElementById('tab-quick-notes')?.addEventListener('click', () => setTab('quick-notes'));
+  document.getElementById('admin-tab-add-note')?.addEventListener('click', () => selectAdminMenuItem('add-note'));
+  document.getElementById('admin-tab-all-notes')?.addEventListener('click', () => selectAdminMenuItem('all-notes'));
+  document.getElementById('admin-tab-quick-notes')?.addEventListener('click', () => selectAdminMenuItem('quick-notes'));
+  document.getElementById('worker-menu-toggle-btn')?.addEventListener('click', openWorkerMenu);
+  document.getElementById('worker-close-menu-btn')?.addEventListener('click', closeWorkerMenu);
+  document.getElementById('worker-menu-logout')?.addEventListener('click', () => { logout(); closeWorkerMenu(); });
+  document.getElementById('worker-menu-overlay')?.addEventListener('click', closeWorkerMenu);
+  document.getElementById('menu-toggle-btn')?.addEventListener('click', openAdminMenu);
+  document.getElementById('close-menu-btn')?.addEventListener('click', closeAdminMenu);
+  document.getElementById('menu-item-add-note')?.addEventListener('click', () => selectAdminMenuItem('add-note'));
+  document.getElementById('menu-item-all-notes')?.addEventListener('click', () => selectAdminMenuItem('all-notes'));
+  document.getElementById('menu-item-workers')?.addEventListener('click', () => selectAdminMenuItem('workers'));
+  document.getElementById('menu-item-worker-notes')?.addEventListener('click', () => selectAdminMenuItem('worker-notes'));
+  document.getElementById('menu-item-quick-notes')?.addEventListener('click', () => selectAdminMenuItem('quick-notes'));
+  document.getElementById('menu-item-all-workers-quick-notes')?.addEventListener('click', () => selectAdminMenuItem('all-workers-quick-notes'));
+  document.getElementById('admin-menu-logout')?.addEventListener('click', () => { logout(); closeAdminMenu(); });
+  document.getElementById('admin-menu-overlay')?.addEventListener('click', closeAdminMenu);
+  document.getElementById('note-modal')?.addEventListener('click', (e) => {
+    if (e.target.id === 'note-modal') closeModal();
+  });
+  document.getElementById('edit-worker-modal')?.addEventListener('click', (e) => {
+    if (e.target.id === 'edit-worker-modal') closeEditWorkerModal();
+  });
 }
 
 function showWorkerDashboard() {
@@ -620,12 +775,14 @@ function selectAdminMenuItem(section) {
   document.getElementById('menu-item-workers').classList.toggle('active', section === 'workers');
   document.getElementById('menu-item-worker-notes').classList.toggle('active', section === 'worker-notes');
   document.getElementById('menu-item-quick-notes').classList.toggle('active', section === 'quick-notes');
+  document.getElementById('menu-item-all-workers-quick-notes').classList.toggle('active', section === 'all-workers-quick-notes');
   closeAdminMenu();
   document.getElementById('admin-worker-section').classList.toggle('hidden', section !== 'workers');
   document.getElementById('admin-worker-notes-section').classList.toggle('hidden', section !== 'worker-notes');
   document.getElementById('admin-note-section').classList.toggle('hidden', section !== 'add-note');
   document.getElementById('admin-all-notes-section').classList.toggle('hidden', section !== 'all-notes');
   document.getElementById('admin-quick-notes-section').classList.toggle('hidden', section !== 'quick-notes');
+  document.getElementById('admin-all-workers-quick-notes-section').classList.toggle('hidden', section !== 'all-workers-quick-notes');
   const tabsContainer = document.getElementById('admin-tabs-container');
   tabsContainer.classList.toggle('hidden', !['add-note', 'all-notes', 'quick-notes'].includes(section));
   if (['add-note', 'all-notes', 'quick-notes'].includes(section)) {
@@ -642,6 +799,29 @@ function selectAdminMenuItem(section) {
   if (section === 'add-note') renderAdminTodayNotes();
   if (section === 'all-notes') renderAllAdminNotes();
   if (section === 'quick-notes') renderAdminQuickNotes();
+  if (section === 'all-workers-quick-notes') renderAllWorkersQuickNotes();
+}
+
+function renderAllWorkersQuickNotes() {
+  const allQuickNotes = cache.get('quick_notes_list') || [];
+  const workersQuickNotes = allQuickNotes.filter(note => note.Agent !== "Sabbir");
+  const container = document.getElementById('admin-all-workers-quick-notes-container');
+  if (!container) return;
+  const headerHtml = `
+    <div class="list-header">
+      <div class="list-title">All Workers' Quick Notes</div>
+      <div class="header-right-group">
+        <span class="count">${workersQuickNotes.length}</span>
+      </div>
+    </div>`;
+  if (!workersQuickNotes.length) {
+    container.innerHTML = headerHtml + '<div class="empty">No Quick Notes from Workers</div>';
+    return;
+  }
+  container.innerHTML = headerHtml + `
+    <div class="cards-container">
+      ${workersQuickNotes.map((note, index) => renderQuickNoteCard(note, index + 1)).join('')}
+    </div>`;
 }
 
 // ------------------------------
@@ -667,7 +847,7 @@ async function deleteSingleAdminNote(noteKey) {
   await deleteSelectedAdmin();
 }
 
-function renderAdminNoteCard(i, isTodayView = false) {
+function renderAdminNoteCard(i, isTodayView = false, index) {
   const noteKey = getNoteKey(i);
   const isSelected = state.adminSelectedIds.has(noteKey);
   const isAdminNote = i.Agent === "Sabbir";
@@ -675,25 +855,15 @@ function renderAdminNoteCard(i, isTodayView = false) {
   return `
     <div class="note-card ${isSelected ? 'selected-row' : ''}" onclick="showFullNote('${i.id || i.sheetIndex}', event)">
       <div class="card-top">
-        <div style="display: flex; gap: 12px; align-items: center;">
+        <div style="display: flex; gap: 12px; align-items: flex-start;">
           ${isAllView ? `
           <label class="custom-checkbox" onclick="event.stopPropagation();">
             <input type="checkbox" ${isSelected ? 'checked' : ''} onchange="event.stopPropagation(); toggleAdminSelect('${noteKey.replace(/'/g, "\\'")}')">
             <span class="checkmark"></span>
           </label>` : ""}
-          <div class="card-info" style="width: 100%;">
-            <div style="display: flex; justify-content: space-between; width: 100%; margin-bottom: 4px; gap: 16px;">
-              <span style="font-size: 13px; font-weight: 700; color: var(--primary);">${i.Agent || "Unknown Agent"}</span>
-              <span class="card-date">${fmtDisplayDate(i.Date)}</span>
-            </div>
-            <div style="display: flex; align-items: center; gap: 8px;">
-              <span class="card-phone">${i.Number || "No Number"}</span>
-              ${i.Number ? `
-                <button class="copy-number-btn" onclick="copyNumber('${i.Number}', event)" title="Copy Number" style="background: rgba(255,255,255,0.05); border: 1px solid rgba(255,255,255,0.1); padding: 4px; border-radius: 6px; cursor: pointer; display: flex; align-items: center; justify-content: center; transition: all 0.2s;">
-                  <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="9" y="9" width="13" height="13" rx="2" ry="2"></rect><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"></path></svg>
-                </button>
-              ` : ''}
-            </div>
+          <div style="display: flex; justify-content: space-between; width: 100%; gap: 16px;">
+            <span class="card-number">#${index}</span>
+            <span class="card-date">${fmtDisplayDate(i.Date)}</span>
           </div>
         </div>
         ${isAdminNote ? `
@@ -702,6 +872,14 @@ function renderAdminNoteCard(i, isTodayView = false) {
               <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7"></path><path d="M18.5 2.5a2.121 2.121 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z"></path></svg>
             </button>
           </div>
+        ` : ''}
+      </div>
+      <div style="display: flex; align-items: center; gap: 8px; margin-bottom: 8px;">
+        <span class="card-phone">${i.Number || "No Number"}</span>
+        ${i.Number ? `
+          <button class="copy-number-btn" onclick="copyNumber('${i.Number}', event)" title="Copy Number" style="background: rgba(255,255,255,0.05); border: 1px solid rgba(255,255,255,0.1); padding: 4px; border-radius: 6px; cursor: pointer; display: flex; align-items: center; justify-content: center; transition: all 0.2s;">
+            <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="9" y="9" width="13" height="13" rx="2" ry="2"></rect><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"></path></svg>
+          </button>
         ` : ''}
       </div>
       <div class="card-note">${i.Note || "No content"}</div>
@@ -731,7 +909,7 @@ async function renderAdminTodayNotes() {
   }
   container.innerHTML = headerHtml + `
     <div class="cards-container">
-      ${todayNotes.map(note => renderAdminNoteCard(note, true)).join('')}
+      ${todayNotes.map((note, index) => renderAdminNoteCard(note, true, index + 1)).join('')}
     </div>`;
 }
 
@@ -758,7 +936,7 @@ async function renderAllAdminNotes() {
   } else {
     container.innerHTML = headerHtml + `
       <div class="cards-container">
-        ${allNotes.map(note => renderAdminNoteCard(note, false)).join('')}
+        ${allNotes.map((note, index) => renderAdminNoteCard(note, false, index + 1)).join('')}
       </div>`;
   }
 }
@@ -789,6 +967,7 @@ async function saveAdminNote() {
   let currentNotes = cache.get('notes_list') || [];
   let existingNote = null;
   let isNew = false;
+  let tempId = null;
   if (state.adminEditingId !== null) {
     existingNote = currentNotes.find(n => (n.id === state.adminEditingId || n.sheetIndex === state.adminEditingId));
   }
@@ -810,9 +989,9 @@ async function saveAdminNote() {
     }
   } else {
     isNew = true;
-    savePayload.id = Date.now().toString(); // Temp ID
-    savePayload.sheetIndex = savePayload.id;
-    currentNotes.unshift(savePayload);
+    tempId = Date.now().toString();
+    const tempNote = { ...savePayload, id: tempId, sheetIndex: tempId };
+    currentNotes.unshift(tempNote);
   }
   cache.set('notes_list', currentNotes);
   renderAdminTodayNotes();
@@ -820,18 +999,34 @@ async function saveAdminNote() {
   statusEl.textContent = "Syncing...";
   statusEl.style.color = "#3b82f6";
 
-  // Sync to Firestore
+  // Sync to Firestore: create a copy without id if new
+  let firestorePayload = { ...savePayload };
+  if (isNew) {
+    delete firestorePayload.id;
+    delete firestorePayload.sheetIndex;
+  }
   try {
-    await saveNoteToFirestore(savePayload);
+    await saveNoteToFirestore(firestorePayload);
+    // If it's a new note, update cache with real Firestore id
+    if (isNew) {
+      const realId = firestorePayload.id;
+      currentNotes = cache.get('notes_list') || [];
+      const tempNoteIndex = currentNotes.findIndex(n => n.id === tempId);
+      if (tempNoteIndex !== -1) {
+        currentNotes[tempNoteIndex] = { ...currentNotes[tempNoteIndex], id: realId, sheetIndex: realId };
+        cache.set('notes_list', currentNotes);
+        renderAdminTodayNotes();
+        renderAllAdminNotes();
+      }
+    }
     // Send notification if it's a new Today's Note
     if (isNew && fmtDate(savePayload.Date) === todayStr()) {
       sendNotification(`New Note from ${savePayload.Agent}`, savePayload.Note);
     }
     statusEl.textContent = "Saved!";
     statusEl.style.color = "green";
-    renderAdminTodayNotes();
-    renderAllAdminNotes();
   } catch (e) {
+    console.error("Error in saveAdminNote:", e);
     statusEl.textContent = "Saved locally, sync failed!";
     statusEl.style.color = "orange";
   }
@@ -1027,12 +1222,12 @@ function renderAdminWorkerNotes(agentName) {
         <span class="count">${todayNotes.length}</span>
       </div>
     </div>
-    ${todayNotes.length ? `<div class="cards-container">${todayNotes.map(n => renderAdminNoteCard(n, true)).join('')}</div>` : '<div class="empty">No notes today</div>'}
+    ${todayNotes.length ? `<div class="cards-container">${todayNotes.map((n, index) => renderAdminNoteCard(n, true, index + 1)).join('')}</div>` : '<div class="empty">No notes today</div>'}
     <div class="list-header" style="margin-bottom: 12px; margin-top: 24px;">
       <div class="list-title">All Notes</div>
       <span class="count">${olderNotes.length}</span>
     </div>
-    ${olderNotes.length ? `<div class="cards-container">${olderNotes.map(n => renderAdminNoteCard(n, false)).join('')}</div>` : '<div class="empty">No other notes</div>'}`;
+    ${olderNotes.length ? `<div class="cards-container">${olderNotes.map((n, index) => renderAdminNoteCard(n, false, index + 1)).join('')}</div>` : '<div class="empty">No other notes</div>'}`;
   container.innerHTML = html;
 }
 
@@ -1107,7 +1302,7 @@ function renderFilteredNotes() {
   }
   container.innerHTML = headerHtml + `
     <div class="cards-container">
-      ${filteredNotes.map(note => renderAdminNoteCard(note, false)).join('')}
+      ${filteredNotes.map((note, index) => renderAdminNoteCard(note, false, index + 1)).join('')}
     </div>`;
 }
 
@@ -1155,6 +1350,7 @@ async function saveNote(data) {
     console.log("Current notes from cache:", currentNotes);
     let isNew = false;
     let existingNote = null;
+    let tempId = null;
     if (state.editingId !== null) {
       existingNote = currentNotes.find(n => (n.id === state.editingId || n.sheetIndex === state.editingId));
       console.log("Existing note found:", existingNote);
@@ -1170,9 +1366,9 @@ async function saveNote(data) {
       }
     } else {
       isNew = true;
-      data.id = Date.now().toString();
-      data.sheetIndex = data.id;
-      currentNotes.unshift(data);
+      tempId = Date.now().toString();
+      const tempNote = { ...data, id: tempId, sheetIndex: tempId };
+      currentNotes.unshift(tempNote);
     }
 
     cache.set('notes_list', currentNotes);
@@ -1182,8 +1378,26 @@ async function saveNote(data) {
     status.textContent = "Syncing...";
     status.style.color = "#3b82f6";
 
-    // Sync to Firestore
-    await saveNoteToFirestore(data);
+    // Sync to Firestore: create a copy without id if it's new
+    let firestorePayload = { ...data };
+    if (isNew) {
+      delete firestorePayload.id;
+      delete firestorePayload.sheetIndex;
+    }
+    await saveNoteToFirestore(firestorePayload);
+    
+    // If it's a new note, update the cache with the real Firestore id
+    if (isNew) {
+      const realId = firestorePayload.id; // saveNoteToFirestore sets firestorePayload.id now
+      currentNotes = cache.get('notes_list') || [];
+      const tempNoteIndex = currentNotes.findIndex(n => n.id === tempId);
+      if (tempNoteIndex !== -1) {
+        currentNotes[tempNoteIndex] = { ...currentNotes[tempNoteIndex], id: realId, sheetIndex: realId };
+        cache.set('notes_list', currentNotes);
+        renderWorkerTodayNotes();
+        renderWorkerAllNotes();
+      }
+    }
     
     // Send notification if it's a new Today's Note
     if (isNew && fmtDate(data.Date) === todayStr()) {
@@ -1192,10 +1406,9 @@ async function saveNote(data) {
     
     status.textContent = "Saved!";
     status.style.color = "green";
-    renderWorkerTodayNotes();
-    renderWorkerAllNotes();
     setTimeout(() => { if (status.textContent.includes("Saved")) status.textContent = ""; }, 3000);
   } catch (e) {
+    console.error("Error in saveNote:", e);
     status.textContent = "Saved locally, sync failed!";
     status.style.color = "orange";
   }
@@ -1301,8 +1514,13 @@ function setTab(tab) {
   state.activeTab = tab;
   document.getElementById('tab-today').classList.toggle('active', tab === 'today');
   document.getElementById('tab-all').classList.toggle('active', tab === 'all');
+  document.getElementById('tab-quick-notes').classList.toggle('active', tab === 'quick-notes');
   document.getElementById('today-view').classList.toggle('hidden', tab !== 'today');
   document.getElementById('all-view').classList.toggle('hidden', tab !== 'all');
+  document.getElementById('worker-quick-notes-view').classList.toggle('hidden', tab !== 'quick-notes');
+  if (tab === 'quick-notes') {
+    renderWorkerQuickNotes();
+  }
 }
 
 function renderPhones(items) {
@@ -1357,7 +1575,7 @@ function renderList(items, container) {
     </div>`;
   const cardsHtml = filteredItems.length ? `
     <div class="cards-container">
-      ${filteredItems.map(i => renderNoteCard(i, container)).join("")}
+      ${filteredItems.map((i, index) => renderNoteCard(i, container, index + 1)).join("")}
     </div>` : `<div class="empty">${isAllView ? "No Notes Found" : "No Notes For Today"}</div>`;
   el.innerHTML = headerHtml + cardsHtml;
   if (isAllView) {
@@ -1370,32 +1588,22 @@ function renderList(items, container) {
   }
 }
 
-function renderNoteCard(i, container = "") {
+function renderNoteCard(i, container = "", index) {
   const noteKey = getNoteKey(i);
   const isSelected = state.selectedIds.has(noteKey);
   const isAllView = container === "all-view";
   return `
     <div class="note-card ${isSelected ? 'selected-row' : ''}" onclick="showFullNote('${i.id || i.sheetIndex}', event)">
       <div class="card-top">
-        <div style="display: flex; gap: 12px; align-items: center;">
+        <div style="display: flex; gap: 12px; align-items: flex-start;">
           ${isAllView ? `
           <label class="custom-checkbox" onclick="event.stopPropagation();">
             <input type="checkbox" ${isSelected ? 'checked' : ''} onchange="event.stopPropagation(); toggleSelect('${noteKey.replace(/'/g, "\\'")}')">
             <span class="checkmark"></span>
           </label>` : ""}
-          <div class="card-info">
-            <div style="display: flex; justify-content: space-between; width: 100%; margin-bottom: 4px; gap: 16px;">
-              <span style="font-size: 13px; font-weight: 700; color: var(--primary);">${i.Agent || "Unknown Agent"}</span>
-              <span class="card-date">${fmtDisplayDate(i.Date)}</span>
-            </div>
-            <div style="display: flex; align-items: center; gap: 8px;">
-              <span class="card-phone">${i.Number || "No Number"}</span>
-              ${i.Number ? `
-                <button class="copy-number-btn" onclick="copyNumber('${i.Number}', event)" title="Copy Number" style="background: rgba(255,255,255,0.05); border: 1px solid rgba(255,255,255,0.1); padding: 4px; border-radius: 6px; cursor: pointer; display: flex; align-items: center; justify-content: center; transition: all 0.2s;">
-                  <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="9" y="9" width="13" height="13" rx="2" ry="2"></rect><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"></path></svg>
-                </button>
-              ` : ''}
-            </div>
+          <div style="display: flex; justify-content: space-between; width: 100%; gap: 16px;">
+            <span class="card-number">#${index}</span>
+            <span class="card-date">${fmtDisplayDate(i.Date)}</span>
           </div>
         </div>
         <div class="card-actions" style="gap: 8px;">
@@ -1403,6 +1611,14 @@ function renderNoteCard(i, container = "") {
             <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7"></path><path d="M18.5 2.5a2.121 2.121 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z"></path></svg>
           </button>
         </div>
+      </div>
+      <div style="display: flex; align-items: center; gap: 8px; margin-bottom: 8px;">
+        <span class="card-phone">${i.Number || "No Number"}</span>
+        ${i.Number ? `
+          <button class="copy-number-btn" onclick="copyNumber('${i.Number}', event)" title="Copy Number" style="background: rgba(255,255,255,0.05); border: 1px solid rgba(255,255,255,0.1); padding: 4px; border-radius: 6px; cursor: pointer; display: flex; align-items: center; justify-content: center; transition: all 0.2s;">
+            <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="9" y="9" width="13" height="13" rx="2" ry="2"></rect><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"></path></svg>
+          </button>
+        ` : ''}
       </div>
       <div class="card-note">${i.Note || "No content"}</div>
     </div>`;
@@ -1486,17 +1702,34 @@ async function saveQuickNote(data) {
   const status = document.getElementById("status");
   try {
     let currentQuickNotes = cache.get('quick_notes_list') || [];
-    data.id = Date.now().toString();
-    currentQuickNotes.unshift(data);
+    const tempId = Date.now().toString();
+    const tempNote = { ...data, id: tempId };
+    currentQuickNotes.unshift(tempNote);
     cache.set('quick_notes_list', currentQuickNotes);
     state.quickNotes = currentQuickNotes;
+    if (state.activeTab === 'quick-notes') {
+      renderWorkerQuickNotes();
+    }
     status.textContent = "Syncing...";
     status.style.color = "#3b82f6";
-    await saveQuickNoteToFirestore(data);
+    let firestorePayload = { ...data };
+    delete firestorePayload.id;
+    await saveQuickNoteToFirestore(firestorePayload);
+    const realId = firestorePayload.id;
+    currentQuickNotes = cache.get('quick_notes_list') || [];
+    const tempNoteIndex = currentQuickNotes.findIndex(n => n.id === tempId);
+    if (tempNoteIndex !== -1) {
+      currentQuickNotes[tempNoteIndex] = { ...currentQuickNotes[tempNoteIndex], id: realId };
+      cache.set('quick_notes_list', currentQuickNotes);
+      if (state.activeTab === 'quick-notes') {
+        renderWorkerQuickNotes();
+      }
+    }
     status.textContent = "Saved!";
     status.style.color = "green";
     setTimeout(() => { if (status.textContent.includes("Saved")) status.textContent = ""; }, 3000);
   } catch (e) {
+    console.error("Error in saveQuickNote:", e);
     status.textContent = "Saved locally, sync failed!";
     status.style.color = "orange";
   }
@@ -1517,18 +1750,35 @@ async function saveAdminQuickNote() {
   const finalDate = fmtDate(new Date());
   let currentQuickNotes = cache.get('quick_notes_list') || [];
   const savePayload = { Agent: "Sabbir", Date: finalDate, Note: noteInput, createdAt: Date.now(), lastRemindedAt: null };
-  savePayload.id = Date.now().toString();
-  currentQuickNotes.unshift(savePayload);
+  const tempId = Date.now().toString();
+  const tempNote = { ...savePayload, id: tempId };
+  currentQuickNotes.unshift(tempNote);
   cache.set('quick_notes_list', currentQuickNotes);
   state.quickNotes = currentQuickNotes;
-  renderAdminQuickNotes();
+  if (state.adminActiveSection === 'quick-notes') {
+    renderAdminQuickNotes();
+  }
   statusEl.textContent = "Syncing...";
   statusEl.style.color = "#3b82f6";
   try {
-    await saveQuickNoteToFirestore(savePayload);
+    let firestorePayload = { ...savePayload };
+    delete firestorePayload.id;
+    await saveQuickNoteToFirestore(firestorePayload);
+    const realId = firestorePayload.id;
+    currentQuickNotes = cache.get('quick_notes_list') || [];
+    const tempNoteIndex = currentQuickNotes.findIndex(n => n.id === tempId);
+    if (tempNoteIndex !== -1) {
+      currentQuickNotes[tempNoteIndex] = { ...currentQuickNotes[tempNoteIndex], id: realId };
+      cache.set('quick_notes_list', currentQuickNotes);
+      if (state.adminActiveSection === 'quick-notes') {
+        renderAdminQuickNotes();
+      }
+    }
     statusEl.textContent = "Saved!";
     statusEl.style.color = "green";
-    renderAdminQuickNotes();
+    if (state.adminActiveSection === 'quick-notes') {
+      renderAdminQuickNotes();
+    }
   } catch (e) {
     statusEl.textContent = "Saved locally, sync failed!";
     statusEl.style.color = "orange";
@@ -1540,38 +1790,84 @@ async function saveAdminQuickNote() {
 }
 
 function renderAdminQuickNotes() {
-  const quickNotes = cache.get('quick_notes_list') || [];
+  const allQuickNotes = cache.get('quick_notes_list') || [];
+  const adminQuickNotes = allQuickNotes.filter(note => note.Agent === "Sabbir");
   const container = document.getElementById('admin-quick-notes-container');
   if (!container) return;
   const headerHtml = `
     <div class="list-header">
-      <div class="list-title">Quick Notes</div>
+      <div class="list-title">My Quick Notes</div>
       <div class="header-right-group">
-        <span class="count">${quickNotes.length}</span>
+        <span class="count">${adminQuickNotes.length}</span>
       </div>
     </div>`;
-  if (!quickNotes.length) {
+  if (!adminQuickNotes.length) {
     container.innerHTML = headerHtml + '<div class="empty">No Quick Notes</div>';
     return;
   }
   container.innerHTML = headerHtml + `
     <div class="cards-container">
-      ${quickNotes.map(note => renderQuickNoteCard(note)).join('')}
+      ${adminQuickNotes.map((note, index) => renderQuickNoteCard(note, index + 1)).join('')}
     </div>`;
 }
 
-function renderQuickNoteCard(note) {
+function renderWorkerQuickNotes() {
+  if (!state.currentUser) return;
+  const allQuickNotes = cache.get('quick_notes_list') || [];
+  const workerQuickNotes = allQuickNotes.filter(note => note.Agent === state.currentUser.name);
+  const container = document.getElementById('worker-quick-notes-view');
+  if (!container) return;
+  const headerHtml = `
+    <div class="list-header">
+      <div class="list-title">My Quick Notes</div>
+      <div class="header-right-group">
+        <span class="count">${workerQuickNotes.length}</span>
+      </div>
+    </div>`;
+  if (!workerQuickNotes.length) {
+    container.innerHTML = headerHtml + '<div class="empty">No Quick Notes</div>';
+    return;
+  }
+  container.innerHTML = headerHtml + `
+    <div class="cards-container">
+      ${workerQuickNotes.map((note, index) => renderQuickNoteCard(note, index + 1)).join('')}
+    </div>`;
+}
+
+// Delete a single quick note manually
+async function deleteQuickNote(id, event) {
+  if (event) event.stopPropagation();
+  if (!confirm('Sure you want to delete this quick note?')) return;
+  await deleteQuickNotesFromFirestore([id]);
+  renderAdminQuickNotes();
+  renderWorkerQuickNotes();
+  renderAllWorkersQuickNotes();
+}
+
+function renderQuickNoteCard(note, index) {
+  const remaining = getRemainingTime(note.createdAt);
+  if (remaining.expired) return '';
+
   return `
     <div class="note-card" onclick="showFullQuickNote('${note.id}', event)">
       <div class="card-top">
-        <div style="display: flex; gap: 12px; align-items: center;">
-          <div class="card-info" style="width: 100%;">
-            <div style="display: flex; justify-content: space-between; width: 100%; margin-bottom: 4px; gap: 16px;">
-              <span style="font-size: 13px; font-weight: 700; color: var(--primary);">${note.Agent || "Unknown Agent"}</span>
-              <span class="card-date">${fmtDisplayDate(note.Date)}</span>
-            </div>
+        <div style="display: flex; gap: 12px; align-items: flex-start; flex: 1;">
+          <div style="display: flex; justify-content: space-between; width: 100%; gap: 16px;">
+            <span class="card-number">#${index}</span>
+            <span class="card-date">${fmtDisplayDate(note.Date)}</span>
           </div>
         </div>
+        <div class="card-actions" style="gap: 4px;">
+          <button class="icon-btn" onclick="deleteQuickNote('${note.id}', event)" style="padding: 4px; border-radius: 4px;">
+            <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+              <polyline points="3 6 5 6 21 6"></polyline>
+              <path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"></path>
+            </svg>
+          </button>
+        </div>
+      </div>
+      <div style="font-size: 12px; color: ${remaining.isHourCountdown ? '#f59e0b' : '#9ca3af'}; margin-bottom: 8px;">
+        ${remaining.text}
       </div>
       <div class="card-note">${note.Note || "No content"}</div>
     </div>`;
@@ -1595,6 +1891,11 @@ function showFullQuickNote(id, event) {
 
 async function init() {
   console.log("init function STARTED!");
+  hydrateWorkersForLogin();
+  attachAccessCodeListeners();
+  attachAppEventListeners();
+  showAccessScreen();
+
   try {
     // Request notification permission
     await requestNotificationPermission();
@@ -1608,6 +1909,16 @@ async function init() {
     // Start Quick Note reminder check every minute
     setInterval(checkQuickNoteReminders, 60 * 1000); // Check every 60 seconds
     console.log("Quick Note reminder interval started!");
+    // Delete expired quick notes
+    await deleteExpiredQuickNotes();
+    // Check and delete expired quick notes every hour
+    setInterval(deleteExpiredQuickNotes, 60 * 60 * 1000); // Every hour
+    // Update quick note countdowns every minute
+    setInterval(() => {
+      renderAdminQuickNotes();
+      renderWorkerQuickNotes();
+      renderAllWorkersQuickNotes();
+    }, 60 * 1000); // Every minute
     // Check saved login
   const savedLogin = localStorage.getItem('evernote_login');
   if (savedLogin) {
@@ -1632,59 +1943,6 @@ async function init() {
       console.error("Error parsing saved login:", e);
     }
   }
-  showAccessScreen();
-
-  // Attach keypad listeners
-  document.querySelectorAll('.keypad-btn[data-digit]').forEach(btn => {
-    btn.addEventListener('click', () => {
-      if (enteredCode.length < 4) {
-        enteredCode += btn.dataset.digit;
-        updateCodeDisplay();
-        checkAndLogin();
-      }
-    });
-  });
-  document.querySelector('.keypad-btn[data-action="delete"]')?.addEventListener('click', () => {
-    enteredCode = enteredCode.slice(0, -1);
-    updateCodeDisplay();
-  });
-  document.querySelector('.keypad-btn[data-action="clear"]')?.addEventListener('click', () => {
-    enteredCode = '';
-    updateCodeDisplay();
-  });
-
-  // Attach other listeners
-  console.log("Attaching event listeners!");
-  console.log("document.getElementById('save'):", document.getElementById('save'));
-  console.log("document.getElementById('admin-save-btn'):", document.getElementById('admin-save-btn'));
-  document.getElementById('save')?.addEventListener('click', saveNoteWrapper);
-  document.getElementById('admin-save-btn')?.addEventListener('click', saveAdminNote);
-  document.getElementById('add-worker-btn')?.addEventListener('click', addWorker);
-  document.getElementById('save-worker-btn')?.addEventListener('click', saveWorkerChanges);
-  document.getElementById('close-edit-worker-modal')?.addEventListener('click', closeEditWorkerModal);
-  document.getElementById('paste-phone')?.addEventListener('click', pastePhone);
-  document.getElementById('paste-admin-phone')?.addEventListener('click', pasteAdminPhone);
-  document.getElementById('save-quick-note-worker')?.addEventListener('click', saveQuickNoteWrapper);
-  document.getElementById('save-quick-note-admin')?.addEventListener('click', saveAdminQuickNote);
-  document.getElementById('back-to-workers')?.addEventListener('click', backToWorkerList);
-  document.getElementById('close-modal')?.addEventListener('click', closeModal);
-  document.getElementById('tab-today')?.addEventListener('click', () => setTab('today'));
-  document.getElementById('tab-all')?.addEventListener('click', () => setTab('all'));
-  document.getElementById('admin-tab-add-note')?.addEventListener('click', () => selectAdminMenuItem('add-note'));
-  document.getElementById('admin-tab-all-notes')?.addEventListener('click', () => selectAdminMenuItem('all-notes'));
-  // Worker menu
-  document.getElementById('worker-menu-logout')?.addEventListener('click', () => { logout(); closeWorkerMenu(); });
-  document.getElementById('worker-menu-overlay')?.addEventListener('click', closeWorkerMenu);
-  // Admin menu
-  document.getElementById('admin-menu-logout')?.addEventListener('click', () => { logout(); closeAdminMenu(); });
-  document.getElementById('admin-menu-overlay')?.addEventListener('click', closeAdminMenu);
-  // Close modal on overlay click
-  document.getElementById('note-modal')?.addEventListener('click', (e) => {
-    if (e.target.id === 'note-modal') closeModal();
-  });
-  document.getElementById('edit-worker-modal')?.addEventListener('click', (e) => {
-    if (e.target.id === 'edit-worker-modal') closeEditWorkerModal();
-  });
   console.log("init function COMPLETED successfully!");
   } catch (e) {
     console.error("ERROR in init function!", e);
